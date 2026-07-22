@@ -109,7 +109,7 @@ This document outlines the high-level strategic roadmap for AI Dev OS — a mult
 
 ## Related Documents
 
-- [Implementation Roadmap](./IMPL_ROADMAP.md)
-- [Project Vision](./VISION.md)
+- [Implementation Roadmap](./IMPLEMENTATION_ROADMAP.md)
+- [Project Vision](./PROJECT_VISION.md)
 - [Product Overview](./PRODUCT_OVERVIEW.md)
 - [PRD](./PRD.md)

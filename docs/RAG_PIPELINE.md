@@ -194,6 +194,6 @@ Chunks are stored in the Knowledge System and referenced by the BM25 FTS5 index 
 | [Knowledge System](KNOWLEDGE_SYSTEM.md) | Main KB and Global KB architecture |
 | [Vector Store](VECTOR_STORE.md) | ANN vector index specification |
 | [Embeddings](EMBEDDINGS.md) | Embedding generation pipeline |
-| [Obsidian Graph Engine](OBSIDIAN_GRAPH.md) | Graph-based knowledge navigation |
+| [Obsidian Graph Engine](OBSIDIAN_GRAPH_ENGINE.md) | Graph-based knowledge navigation |
 | [Persistent Memory](PERSISTENT_MEMORY.md) | Long-term memory backed by RAG |
 | [Agent Memory](AGENT_MEMORY.md) | Per-agent memory tiers |

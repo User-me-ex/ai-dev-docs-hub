@@ -6,7 +6,7 @@ Proposed
 
 ## Context
 
-The [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md) supports an `auto_fix` capability: when a rule violation is detected, the Guardian can attempt to auto-remediate before issuing a veto (e.g. redacting a secret from an artifact). The question is whether auto-fix should be **opt-in per run** (the user consents before any fix is applied) or **on by default** (the Guardian applies fixes automatically and reports what it did).
+The [Architecture Guardian](../ARCHITECTURE_GUARDIAN.md) supports an `auto_fix` capability: when a rule violation is detected, the Guardian can attempt to auto-remediate before issuing a veto (e.g. redacting a secret from an artifact). The question is whether auto-fix should be **opt-in per run** (the user consents before any fix is applied) or **on by default** (the Guardian applies fixes automatically and reports what it did).
 
 ## Decision
 
@@ -40,5 +40,5 @@ The [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md) supports an `auto_fix` c
 
 ## Related
 
-- [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md) — auto-fix spec and AutoFixSpec schema
-- [Main AI Kernel](./MAIN_AI_KERNEL.md) — RunSpec propagation
+- [Architecture Guardian](../ARCHITECTURE_GUARDIAN.md) — auto-fix spec and AutoFixSpec schema
+- [Main AI Kernel](../MAIN_AI_KERNEL.md) — RunSpec propagation

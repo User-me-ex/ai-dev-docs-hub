@@ -20,7 +20,7 @@ Key factors:
 
 **Phase 0–2: TypeScript on Node.js (plus Bun for build/compile). Phase 3+: Rust for performance-critical subsystems.**
 
-For the initial implementation (Phases 0–2 documented in [Implementation Roadmap](./IMPLEMENTATION_ROADMAP.md)), the core runtime will be TypeScript targeting Node.js LTS:
+For the initial implementation (Phases 0–2 documented in [Implementation Roadmap](../IMPLEMENTATION_ROADMAP.md)), the core runtime will be TypeScript targeting Node.js LTS:
 
 - **Kernel**: TypeScript — rapid iteration on the loop, flexible prototyping.
 - **CLI**: TypeScript compiled to a single binary via `bun build --compile`.
@@ -67,6 +67,6 @@ For post-v1.0 (Phase 7+), Rust is the long-term target for:
 
 ## Related
 
-- [Implementation Roadmap](./IMPLEMENTATION_ROADMAP.md) — Phase 1 decision is tracked here
-- [Backend](./BACKEND.md) — process architecture assumes Node.js runtime
-- [Plugin SDK](./PLUGIN_SDK.md) — sandbox model influenced by runtime capabilities
+- [Implementation Roadmap](../IMPLEMENTATION_ROADMAP.md) — Phase 1 decision is tracked here
+- [Backend](../BACKEND.md) — process architecture assumes Node.js runtime
+- [Plugin SDK](../PLUGIN_SDK.md) — sandbox model influenced by runtime capabilities

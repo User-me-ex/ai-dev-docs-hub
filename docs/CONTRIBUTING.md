@@ -99,7 +99,7 @@ The description must be lowercase, imperative, and 72 characters or fewer.
 
 ## Related Documents
 
-- [Local Development Guide](DEVELOPMENT.md)
+- [Local Development Guide](LOCAL_DEV.md)
 - [Code of Conduct](CODE_OF_CONDUCT.md)
-- [Testing Strategy](TESTING.md)
-- [Architecture Overview](ARCHITECTURE.md)
+- [Testing Strategy](TESTING_STRATEGY.md)
+- [Architecture Overview](../diagrams/ARCHITECTURE.md)

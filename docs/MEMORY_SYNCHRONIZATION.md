@@ -8,7 +8,7 @@ Memory Synchronisation handles the propagation of [Persistent Memory](./PERSISTE
 - **In-process**: between the write buffer and the durable store (SQLite / vector index).
 - **Cross-process**: between the Kernel process and plugin subprocesses (via [IPC](./IPC.md)).
 - **Cross-node**: between AI Dev OS instances running on different machines in a cluster ([Deployment](./DEPLOYMENT.md) topology 3+).
-- **Cross-workspace**: between [Global KB](../knowledge-bases/GLOBAL_KB.md) and workspace-scoped KBs (via sync jobs).
+- **Cross-workspace**: between [Global KB](./knowledge-bases/GLOBAL_KB.md) and workspace-scoped KBs (via sync jobs).
 
 The sync model is **eventual consistency** with **last-writer-wins** for conflicting record updates, except for audit log entries which are append-only and never reconciled.
 

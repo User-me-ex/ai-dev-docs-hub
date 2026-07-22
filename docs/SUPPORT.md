@@ -46,9 +46,9 @@ posting in Discord:
   problems organized by symptom
 - [CLI Reference](CLI.md) — complete command reference for the
   `ai-dev-os` CLI including all subcommands and flags
-- [API Reference](API.md) — REST and gRPC API documentation for
+- [API Reference](API_SPEC.md) — REST and gRPC API documentation for
   programmatic access and integration
-- [Architecture Overview](ARCHITECTURE.md) — high-level system
+- [Architecture Overview](../diagrams/ARCHITECTURE.md) — high-level system
   design and component descriptions
 
 ### Stack Overflow

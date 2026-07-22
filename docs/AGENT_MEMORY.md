@@ -174,7 +174,7 @@ await agent.remember(
 | Document | Description |
 |----------|-------------|
 | [Persistent Memory](PERSISTENT_MEMORY.md) | Long-term storage backend, encryption, compaction |
-| [Context Window Management](CONTEXT_WINDOW.md) | Token budgeting, truncation, sliding window |
+| [Context Window Management](CONTEXT_WINDOW_MANAGEMENT.md) | Token budgeting, truncation, sliding window |
 | [Knowledge System](KNOWLEDGE_SYSTEM.md) | Main KB, Global KB, FTS5 search |
 | [Agent Lifecycle](AGENT_LIFECYCLE.md) | Agent creation, dispatch, teardown |
 | [Embeddings](EMBEDDINGS.md) | Vector generation for semantic memory search |

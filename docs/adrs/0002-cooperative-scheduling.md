@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-The [Task Scheduler](./TASK_SCHEDULER.md) must decide how to handle higher-priority tasks when workers are occupied with lower-priority work. Two approaches exist:
+The [Task Scheduler](../TASK_SCHEDULER.md) must decide how to handle higher-priority tasks when workers are occupied with lower-priority work. Two approaches exist:
 
 **Cooperative**: Tasks voluntarily yield control at defined checkpoint boundaries. The scheduler cannot forcibly interrupt a running task.
 
@@ -18,8 +18,8 @@ AI Dev OS runs agents that make LLM calls, which can take 1–60 seconds. The ar
 
 **Cooperative scheduling with checkpoints as preemption points.**
 
-1. The [Agent Lifecycle](AGENT_LIFECYCLE.md) defines explicit checkpoint boundaries (after each tool call, after each model response, every `checkpoint_interval_ms`).
-2. The [Task Scheduler](./TASK_SCHEDULER.md) requests preemption at the next checkpoint boundary by sending a `preemption_request` signal via the SCE.
+1. The [Agent Lifecycle](../AGENT_LIFECYCLE.md) defines explicit checkpoint boundaries (after each tool call, after each model response, every `checkpoint_interval_ms`).
+2. The [Task Scheduler](../TASK_SCHEDULER.md) requests preemption at the next checkpoint boundary by sending a `preemption_request` signal via the SCE.
 3. The worker completes its current unit of work (tool call or model response), checkpoints its state, and yields.
 4. A task that has been preempted more than twice is marked **non-preemptable** — it runs to completion without further interruption to prevent starvation.
 5. Preemption is not supported for tasks that hold exclusive resources (file write locks, database transactions). Those tasks declare `preemptable: false` in their task spec.
@@ -46,6 +46,6 @@ AI Dev OS runs agents that make LLM calls, which can take 1–60 seconds. The ar
 
 ## Related
 
-- [Task Scheduler](./TASK_SCHEDULER.md) — cooperative scheduling algorithm
-- [Agent Lifecycle](./AGENT_LIFECYCLE.md) — checkpoint protocol and state serialisation
-- [Main AI Kernel](./MAIN_AI_KERNEL.md) — mentions cooperative scheduling in Open Questions
+- [Task Scheduler](../TASK_SCHEDULER.md) — cooperative scheduling algorithm
+- [Agent Lifecycle](../AGENT_LIFECYCLE.md) — checkpoint protocol and state serialisation
+- [Main AI Kernel](../MAIN_AI_KERNEL.md) — mentions cooperative scheduling in Open Questions

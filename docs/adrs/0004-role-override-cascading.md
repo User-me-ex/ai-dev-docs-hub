@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-The [Nine Router](./NINE_ROUTER.md) allows role-to-model assignments to be overridden at three scopes: workspace, project, and group. The question is whether group overrides should **cascade down** to child groups or be **flat** (each group has its own override, ignoring parent groups).
+The [Nine Router](../NINE_ROUTER.md) allows role-to-model assignments to be overridden at three scopes: workspace, project, and group. The question is whether group overrides should **cascade down** to child groups or be **flat** (each group has its own override, ignoring parent groups).
 
 Example: a workspace assigns `gpt-4o` to the Builder role. Project `web-app` overrides to `claude-sonnet-4`. Group `frontend` under `web-app` wants `gpt-4o` again — should this be allowed or should the project override be absolute?
 
@@ -44,5 +44,5 @@ Example: a workspace assigns `gpt-4o` to the Builder role. Project `web-app` ove
 
 ## Related
 
-- [Nine Router](./NINE_ROUTER.md) — role assignment rules (Open Questions tracked here)
-- [Model Routing Policy](./MODEL_ROUTING_POLICY.md) — how resolved bindings are used
+- [Nine Router](../NINE_ROUTER.md) — role assignment rules (Open Questions tracked here)
+- [Model Routing Policy](../MODEL_ROUTING_POLICY.md) — how resolved bindings are used

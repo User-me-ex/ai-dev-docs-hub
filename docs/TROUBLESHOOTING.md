@@ -21,7 +21,7 @@
 ai-dev-os ui --port 8081
 ai-dev-os config set daemon.port 50052
 ```
-**Ref:** [Configuration Reference](CONFIG.md)
+**Ref:** [Configuration Reference](CONFIGURATION.md)
 
 ## Model / Provider
 
@@ -30,7 +30,7 @@ ai-dev-os config set daemon.port 50052
 **Solution:**
 - For Ollama: `ollama pull <model-name>`
 - For cloud: verify the model name matches the provider's API. Run `ai-dev-os models list` to see available models.
-**Ref:** [Model Configuration](MODELS.md)
+**Ref:** [Model Configuration](MODEL_PROVIDERS.md)
 
 ### `authentication error`
 **Cause:** Missing or invalid API key.
@@ -40,7 +40,7 @@ ai-dev-os config set OPENAI_API_KEY=<key>
 ai-dev-os config set ANTHROPIC_API_KEY=<key>
 ```
 Or set the corresponding environment variable. Verify with `ai-dev-os doctor --provider`.
-**Ref:** [Provider Setup](PROVIDERS.md)
+**Ref:** [Provider Setup](MODEL_PROVIDERS.md)
 
 ### `rate limited` errors
 **Cause:** Exceeded provider API rate limit.
@@ -48,7 +48,7 @@ Or set the corresponding environment variable. Verify with `ai-dev-os doctor --p
 - Reduce concurrency: `ai-dev-os config set agent.max_concurrency 1`
 - Add delay: `ai-dev-os config set provider.retry_delay 2000`
 - Upgrade your provider tier.
-**Ref:** [Provider Limits](PROVIDERS.md#rate-limits)
+**Ref:** [Provider Limits](MODEL_PROVIDERS.md#rate-limits)
 
 ### Slow model responses
 **Cause:** Large model on CPU, insufficient RAM, or provider throttling.
@@ -68,7 +68,7 @@ ai-dev-os config set agent.budget.tokens 1000000
 ai-dev-os config set agent.budget.cost_usd 5.00
 ```
 Restart the run. Use `ai-dev-os run --budget unlimited` for unbounded tasks.
-**Ref:** [Budget Configuration](CONFIG.md#budgets)
+**Ref:** [Budget Configuration](CONFIGURATION.md#budgets)
 
 ### `guardian veto: policy violation`
 **Cause:** The Guardian agent blocked a tool call that violated a safety policy.
@@ -76,7 +76,7 @@ Restart the run. Use `ai-dev-os run --budget unlimited` for unbounded tasks.
 1. Check the Guardian log: `ai-dev-os logs <run-id> --filter guardian`
 2. Adjust policies in `~/.ai-dev-os/policies.yaml`
 3. Run with `--policy relaxed` if appropriate
-**Ref:** [Safety & Guardian](SAFETY.md)
+**Ref:** [Safety & Guardian](AI_SAFETY.md)
 
 ### Planner loop detected
 **Cause:** The planner agent generated the same plan more than 3 times.
@@ -84,7 +84,7 @@ Restart the run. Use `ai-dev-os run --budget unlimited` for unbounded tasks.
 - Refine your task description with more specific requirements
 - Increase the loop limit: `ai-dev-os config set agent.planner.max_retries 5`
 - Break the task into smaller subtasks
-**Ref:** [Agent Orchestration](ORCHESTRATION.md)
+**Ref:** [Agent Orchestration](MULTI_AGENT_ORCHESTRATION.md)
 
 ### `context too long`
 **Cause:** The conversation or code context exceeds the model's context window.
@@ -92,7 +92,7 @@ Restart the run. Use `ai-dev-os run --budget unlimited` for unbounded tasks.
 - Reduce context: `ai-dev-os config set agent.max_context 32000`
 - Enable context summarization: `ai-dev-os config set agent.summarize true`
 - Use `ai-dev-os run --fresh` to start with an empty context
-**Ref:** [Context Management](CONTEXT.md)
+**Ref:** [Context Management](CONTEXT_WINDOW_MANAGEMENT.md)
 
 ## Data
 
@@ -104,7 +104,7 @@ ai-dev-os memory repair
 ai-dev-os memory reset --force   # Last resort: clears all memory
 ```
 Always back up memory before resetting: `cp -r ~/.ai-dev-os/memory ~/backups/`.
-**Ref:** [Memory System](MEMORY.md)
+**Ref:** [Memory System](PERSISTENT_MEMORY.md)
 
 ### Database migration errors
 **Cause:** Version mismatch between old data and new binary.
@@ -149,7 +149,7 @@ If migration fails, downgrade: `ai-dev-os version downgrade <previous-version>`.
 ai-dev-os config set agent.timeout 300    # Increase timeout in seconds
 ai-dev-os config set agent.retry_on_timeout true
 ```
-**Ref:** [Worker Configuration](WORKERS.md)
+**Ref:** [Worker Configuration](DYNAMIC_WORKERS.md)
 
 ## Network
 
@@ -161,7 +161,7 @@ ai-dev-os config set http_proxy http://proxy:8080
 ai-dev-os config set https_proxy http://proxy:8080
 ai-dev-os config set no_proxy localhost,127.0.0.1
 ```
-**Ref:** [Network Configuration](NETWORK.md)
+**Ref:** [Network Configuration](CONFIGURATION.md)
 
 ### SSL / certificate errors
 **Cause:** Self-signed or corporate CA certificates not trusted.
@@ -170,7 +170,7 @@ ai-dev-os config set no_proxy localhost,127.0.0.1
 ai-dev-os config set ssl.verify false     # Only for testing
 ai-dev-os config set ssl.ca_bundle /path/to/ca.crt
 ```
-**Ref:** [Network Configuration](NETWORK.md#ssl)
+**Ref:** [Network Configuration](CONFIGURATION.md#ssl)
 
 ### Offline mode not working
 **Cause:** A plugin or provider is configured to require internet.
@@ -178,7 +178,7 @@ ai-dev-os config set ssl.ca_bundle /path/to/ca.crt
 - Ensure all active providers are set to local: `ai-dev-os config set provider.default ollama`
 - Disable telemetry: `ai-dev-os config set telemetry.enabled false`
 - Run `ai-dev-os doctor --offline` to validate the offline setup
-**Ref:** [Offline Mode](OFFLINE.md)
+**Ref:** [Offline Mode](LOCAL_MODELS.md)
 
 ---
 

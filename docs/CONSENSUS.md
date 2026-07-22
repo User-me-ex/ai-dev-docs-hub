@@ -18,7 +18,7 @@ Consensus is a sub-protocol of [Multi-Agent Orchestration](./MULTI_AGENT_ORCHEST
 ## Non-Goals
 
 - Enforcing architectural invariants — belongs to [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
-- Voting on factual correctness — the [Critic](../../prompts/CRITIC_PROMPT.md) evaluates output quality.
+- Voting on factual correctness — the [Critic](../prompts/CRITIC_PROMPT.md) evaluates output quality.
 - Implementation code — this repo is documentation-only ([AI Coding Rules](./AI_CODING_RULES.md)).
 
 ## Consensus Protocols

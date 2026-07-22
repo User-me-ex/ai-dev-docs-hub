@@ -20,7 +20,7 @@ AI Dev OS adopts a **defense-in-depth** security philosophy applied across every
 |--------|-----------|---------|
 | **Identity** | Ed25519 key pairs | Every agent, user, and service has a unique cryptographic identity. Identities are self-sovereign — no central IdP. |
 | **Authentication** | Challenge-response + API tokens | Local IPC uses Unix-socket peer credentials (SO_PEERCRED). Remote access requires short-lived bearer tokens bound to an identity. |
-| **Authorization** | Attribute-Based Access Control (ABAC) | Permissions are evaluated against identity attributes, resource labels, and environmental context. See [AuthZ/RBAC](AUTHZ.md). |
+| **Authorization** | Attribute-Based Access Control (ABAC) | Permissions are evaluated against identity attributes, resource labels, and environmental context. See [AuthZ/RBAC](AUTHZ_RBAC.md). |
 | **Encryption at rest** | AES-256-GCM + key wrapping | Persistent Memory, SQLite WALs, and vector indexes are encrypted. Keys are stored in the OS keychain or a hardware-backed TPM. |
 | **Encryption in transit** | mTLS (localhost) / TLS 1.3 (remote) | All IPC between CLI and backend uses mutual TLS. Remote provider calls use TLS 1.3 with certificate pinning. |
 | **Audit** | Append-only event log | Every security event (auth decision, key creation, permission change) is recorded in the SCE audit topic with a monotonic sequence number. |
@@ -110,9 +110,9 @@ We request a **90-day embargo** from the time a report is acknowledged to allow 
 | Document | Description |
 |----------|-------------|
 | [Security Model](SECURITY_MODEL.md) | Formal threat model, trust zones, data-flow diagrams |
-| [Auth System](AUTH.md) | Identity, authentication flows, token management |
-| [AuthZ/RBAC](AUTHZ.md) | Permission model, role definitions, policy evaluation |
+| [Auth System](AUTH_SYSTEM.md) | Identity, authentication flows, token management |
+| [AuthZ/RBAC](AUTHZ_RBAC.md) | Permission model, role definitions, policy evaluation |
 | [Encryption](ENCRYPTION.md) | Cipher suites, key derivation, key rotation |
 | [Audit Log](AUDIT_LOG.md) | Event schema, log shipping, retention |
-| [Secrets Management](SECRETS.md) | Vault architecture, sealing/unsealing, rotation |
+| [Secrets Management](SECRETS_MANAGEMENT.md) | Vault architecture, sealing/unsealing, rotation |
 | [Compliance](COMPLIANCE.md) | SOC 2, ISO 27001, FedRAMP mapping |

@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-The [Nine Router](./NINE_ROUTER.md) polls every configured provider's `/models` endpoint to discover available models. The poll interval determines how quickly new models appear in the UI and how quickly deprecated models are surfaced. Too frequent: wasted API calls and rate-limit risk. Too infrequent: stale model catalog.
+The [Nine Router](../NINE_ROUTER.md) polls every configured provider's `/models` endpoint to discover available models. The poll interval determines how quickly new models appear in the UI and how quickly deprecated models are surfaced. Too frequent: wasted API calls and rate-limit risk. Too infrequent: stale model catalog.
 
 ## Decision
 
@@ -44,5 +44,5 @@ Some providers (notably Anthropic and Mistral) throttle `/models` requests at hi
 
 ## Related
 
-- [Nine Router](./NINE_ROUTER.md) — discovery trigger details
-- [Job Scheduler](./JOB_SCHEDULER.md) — the cron engine that drives the interval
+- [Nine Router](../NINE_ROUTER.md) — discovery trigger details
+- [Job Scheduler](../JOB_SCHEDULER.md) — the cron engine that drives the interval

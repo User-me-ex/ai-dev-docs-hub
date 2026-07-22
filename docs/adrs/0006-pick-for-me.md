@@ -6,7 +6,7 @@ Proposed
 
 ## Context
 
-The [Nine Router](./NINE_ROUTER.md) proposes a "Pick for Me" smart-assign feature that recommends a model for a role based on the role description and available models. The question is the implementation approach: a pure rule engine (capability-based filtering + cost/latency scoring) or a model call (the Router asks an LLM to recommend).
+The [Nine Router](../NINE_ROUTER.md) proposes a "Pick for Me" smart-assign feature that recommends a model for a role based on the role description and available models. The question is the implementation approach: a pure rule engine (capability-based filtering + cost/latency scoring) or a model call (the Router asks an LLM to recommend).
 
 ## Decision
 
@@ -44,5 +44,5 @@ A model-call approach would be re-evaluated for v2.0 when:
 
 ## Related
 
-- [Nine Router](./NINE_ROUTER.md) — "Pick for me" feature in Open Questions
-- [Model Routing Policy](./MODEL_ROUTING_POLICY.md) — the scoring cascade this feature reuses
+- [Nine Router](../NINE_ROUTER.md) — "Pick for me" feature in Open Questions
+- [Model Routing Policy](../MODEL_ROUTING_POLICY.md) — the scoring cascade this feature reuses
