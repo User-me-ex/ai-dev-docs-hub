@@ -1,88 +1,131 @@
 # Support
 
-> Specification for the Support subsystem of the AI Development Operating System. This document is normative — implementations MUST satisfy every MUST clause below.
+## How to Get Help
 
-## Overview
+### GitHub Issues
 
-Support is a first-class subsystem of the AI Development Operating System (AI Dev OS). It participates in the Kernel's intake → plan → route → execute → critique → merge → guard → deliver loop and communicates exclusively through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md). This document defines its purpose, contracts, invariants, and failure modes so that AI agents can reason about it without inspecting any implementation.
+Report bugs and request features at
+[github.com/ai-dev-os/ai-dev-os/issues](https://github.com/ai-dev-os/ai-dev-os/issues).
 
-## Goals
+Before opening a new issue:
+- Search existing issues (both open and closed) to avoid duplicates.
+- Use the provided issue templates — they are enforced by GitHub
+  Forms and ensure we have all information needed to help you.
+- Include the output of `ai-dev-os doctor` and relevant log excerpts
+  from `~/.ai-dev-os/runs/`.
+- Remove or redact sensitive information such as API keys, tokens,
+  and personal data before posting.
+- Issues that do not follow the template may be closed without review.
 
-- Provide an authoritative, unambiguous specification for this subsystem.
-- Define contracts, invariants, and acceptance criteria consumed by AI agents.
-- Stay small enough to review, large enough to remove ambiguity.
+### Discord Community
 
-## Non-Goals
+Join the AI Dev OS Discord server for community support, discussions,
+and announcements. This is the fastest way to get help from
+maintainers and other users in real time.
 
-- Implementation code — this repository is documentation-only (see [AI Coding Rules](./AI_CODING_RULES.md)).
-- Vendor-specific tuning beyond what [Model Providers](./MODEL_PROVIDERS.md) allows.
-- Duplicating contracts that belong to another subsystem; link instead.
+The server is organized into several channels:
+- `#help` — general assistance and troubleshooting
+- `#showcase` — share what you have built with AI Dev OS
+- `#development` — contributor discussions and technical deep dives
+- `#announcements` — release notes and project updates
 
-## Requirements
+Please review the channel descriptions and use the appropriate
+channel for your message. [Invite link](https://discord.gg/ai-dev-os)
 
-- **MUST** be consumable by both humans and AI agents.
-- **MUST** publish every state change to the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md).
-- **MUST** pass every rule enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
-- **MUST** be observable through the metrics defined in [Observability](./OBSERVABILITY.md).
-- **SHOULD** degrade gracefully rather than fail hard.
-- **MAY** be extended via the [Plugin SDK](./PLUGIN_SDK.md) when the extension point is declared here.
+### Documentation
 
-## Architecture
+The full documentation is available at
+[docs.ai-dev-os.org](https://docs.ai-dev-os.org) and is organized
+into the following sections. Start here before opening an issue or
+posting in Discord:
 
-```mermaid
-flowchart LR
-  IN([Input]) --> SUB[Support]
-  SUB --> CTX[(Shared Context Engine)]
-  SUB --> GUARD{Architecture Guardian}
-  GUARD -->|ok| OUT([Output])
-  GUARD -->|veto| SUB
-```
+- [Getting Started](GETTING_STARTED.md) — installation, initial
+  configuration, and running your first task
+- [FAQ](FAQ.md) — answers to common questions by category
+- [Troubleshooting](TROUBLESHOOTING.md) — solutions to common
+  problems organized by symptom
+- [CLI Reference](CLI.md) — complete command reference for the
+  `ai-dev-os` CLI including all subcommands and flags
+- [API Reference](API.md) — REST and gRPC API documentation for
+  programmatic access and integration
+- [Architecture Overview](ARCHITECTURE.md) — high-level system
+  design and component descriptions
 
-The subsystem is stateless at the process boundary; all durable state lives in the [Persistent Memory](./PERSISTENT_MEMORY.md) tier and is projected on demand.
+### Stack Overflow
 
-## Interfaces
+Tag questions with `[ai-dev-os]` on Stack Overflow for community
+answers. This is useful for integration questions — CI/CD pipeline
+configuration, IDE integration, Docker setup, and deployment
+patterns — that benefit from broad visibility and searchability.
 
-- See related subsystems for the concrete API surface this document constrains.
+## Bug Reports
 
-All interfaces follow the envelope defined in [Agent Communication](./AGENT_COMMUNICATION.md) and the error contract defined in [API Spec](./API_SPEC.md).
+When filing a bug report, include the following information to help
+us diagnose and fix the issue quickly. Incomplete reports may be
+delayed or closed:
 
-## Data Model
+1. **Environment**: OS version, AI Dev OS version (`ai-dev-os
+   version`), model provider(s) and model names, Docker version
+   (if used), and hardware specs (CPU, RAM, GPU).
+2. **Expected behavior**: A clear, concise description of what you
+   expected to happen.
+3. **Actual behavior**: A clear, concise description of what
+   actually happened, including full error messages, stack traces,
+   and unexpected output.
+4. **Reproduction steps**: A minimal, complete, and verifiable
+   sequence of commands or actions. Include exact task descriptions
+   if applicable. Assume a fresh installation with defaults.
+5. **Logs and diagnostics**: Full output of `ai-dev-os doctor` and
+   relevant run logs (`ai-dev-os logs <run-id> --all`). For crashes
+   include the daemon log at `~/.ai-dev-os/daemon.log`.
+6. **Configuration**: A sanitized copy of `~/.ai-dev-os/config.yaml`
+   with all API keys, tokens, and secrets removed.
 
-- Entities and fields are declared in the referenced subsystems and in [DATABASE](./DATABASE.md).
+## Feature Requests
 
-Retention and encryption rules are inherited from [Data Retention](./DATA_RETENTION.md) and [Encryption](./ENCRYPTION.md).
+Feature requests are reviewed by the core team every sprint cycle.
+When submitting one:
 
-## Failure Modes
+- Describe the problem you are solving, not just a proposed
+  solution. This helps evaluate alternative approaches.
+- Explain how the feature benefits the broader community, not just
+  your specific use case.
+- Include examples, wireframes, or mockups if applicable.
+- Tag the issue with the `enhancement` label.
 
-- Every failure surfaces through the Shared Context Engine and the audit log.
-- Degradation is preferred over hard failure whenever safety permits.
+Large or controversial features should be discussed in a GitHub
+Discussion before filing a formal issue.
 
-Every failure emits a structured event on the Shared Context Engine and is recorded in the [Audit Log](./AUDIT_LOG.md).
+## Security Disclosures
 
-## Security Considerations
+For security vulnerabilities, **do not** open a public issue. Send
+details to `security@ai-dev-os.org`. We follow a 90-day coordinated
+disclosure timeline:
 
-- Trust boundary: crosses only through signed envelopes (see [Security Model](./SECURITY_MODEL.md)).
-- Secrets are read from [Secrets Management](./SECRETS_MANAGEMENT.md); never inlined.
-- All external calls go through [Model Providers](./MODEL_PROVIDERS.md) or the [Plugin SDK](./PLUGIN_SDK.md) — no ad-hoc network access.
+- Acknowledgment within 48 hours.
+- Initial assessment and patch timeline within 5 business days.
+- Credit in release notes and security advisory (unless you request
+  anonymity).
+- No legal action against researchers acting in good faith.
 
-## Observability
+## Commercial Support
 
-- Metrics, traces, and logs conform to [Observability](./OBSERVABILITY.md), [Tracing](./TRACING.md), and [Logging](./LOGGING.md).
-- Every run carries a `correlation_id` propagated from the Kernel.
+Commercial support, SLAs, on-premises deployments, and custom
+integrations are available through the AI Dev OS Foundation.
+Contact `enterprise@ai-dev-os.org` for pricing and availability.
 
-## Acceptance Criteria
+Available support tiers:
 
-- The contracts above are testable via the [Eval Harness](./EVAL_HARNESS.md).
-- A change to this document requires a matching update to any dependent doc listed in *Related Documents*.
-
-## Open Questions
-
-- _Track open questions as ADRs under [templates/ADR](../templates/ADR.md)._
+- **Community**: Best-effort via Discord and GitHub. No SLA. Free.
+- **Standard**: 48-hour response SLA, email support, quarterly
+  update reviews.
+- **Enterprise**: 4-hour response SLA, dedicated support engineer,
+  priority feature requests, custom integrations, on-premises
+  deployment support.
 
 ## Related Documents
 
-- [System Overview](./SYSTEM_OVERVIEW.md)
-- [Main Ai Kernel](./MAIN_AI_KERNEL.md)
-- [Prd](./PRD.md)
-- [Trd](./TRD.md)
-- [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)
+- [FAQ](FAQ.md) — frequently asked questions
+- [Troubleshooting](TROUBLESHOOTING.md) — common problems and solutions
+- [Code of Conduct](CODE_OF_CONDUCT.md) — community guidelines
+- [Contributing](CONTRIBUTING.md) — how to contribute

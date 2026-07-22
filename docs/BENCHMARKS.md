@@ -1,88 +1,127 @@
 # Benchmarks
 
-> Specification for the Benchmarks subsystem of the AI Development Operating System. This document is normative — implementations MUST satisfy every MUST clause below.
+> Benchmarking framework for measuring system performance, model quality, and end-to-end task completion in AI Dev OS.
 
 ## Overview
 
-Benchmarks is a first-class subsystem of the AI Development Operating System (AI Dev OS). It participates in the Kernel's intake → plan → route → execute → critique → merge → guard → deliver loop and communicates exclusively through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md). This document defines its purpose, contracts, invariants, and failure modes so that AI agents can reason about it without inspecting any implementation.
+The benchmarking subsystem provides a unified framework for measuring and tracking AI Dev OS performance across hardware, model inference, and task execution dimensions. Benchmarks are automated, reproducible, and published alongside releases in the changelog. Every benchmark run emits structured results to the metrics pipeline defined in [Observability](./OBSERVABILITY.md).
 
-## Goals
+## Benchmark Categories
 
-- Provide an authoritative, unambiguous specification for this subsystem.
-- Define contracts, invariants, and acceptance criteria consumed by AI agents.
-- Stay small enough to review, large enough to remove ambiguity.
+| Category | What It Measures | Tooling |
+|---|---|---|
+| System performance | Kernel loop, SCE, memory, vector, graph | `aidevos benchmark run system` |
+| Model quality | Response quality, instruction following, tool use | `aidevos benchmark run model` |
+| Task completion | End-to-end runs, multi-agent coordination, merges | `aidevos benchmark run task` |
+| Prompt quality | Prompt adherence, governance rule coverage | `aidevos benchmark run prompt` |
 
-## Non-Goals
+## System Benchmarks
 
-- Implementation code — this repository is documentation-only (see [AI Coding Rules](./AI_CODING_RULES.md)).
-- Vendor-specific tuning beyond what [Model Providers](./MODEL_PROVIDERS.md) allows.
-- Duplicating contracts that belong to another subsystem; link instead.
+| Benchmark | Metric | Target | Notes |
+|---|---|---|---|
+| Kernel loop latency | p99 latency per loop iteration | < 5 s | Full intake → deliver cycle |
+| SCE publish throughput | events/s sustained | > 1000/s | Single worker, 1 KB events |
+| SCE subscribe latency | p99 delivery from publish | < 10 ms | Same-process subscriber |
+| Memory query latency | p95 vector + metadata hybrid query | < 100 ms | 10 K vector index |
+| Vector index build | seconds per 10 K embeddings | < 30 s | HNSW, efConstruction=200 |
+| Vector index query | p99 recall @ 10 | > 0.95 | On standard benchmark set |
+| Graph traversal speed | edges traversed / s | > 500 K/s | Adjacency list, depth-first |
 
-## Requirements
+## Model Benchmarks
 
-- **MUST** be consumable by both humans and AI agents.
-- **MUST** publish every state change to the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md).
-- **MUST** pass every rule enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
-- **MUST** be observable through the metrics defined in [Observability](./OBSERVABILITY.md).
-- **SHOULD** degrade gracefully rather than fail hard.
-- **MAY** be extended via the [Plugin SDK](./PLUGIN_SDK.md) when the extension point is declared here.
+Benchmarks are run against each [Model Provider](./MODEL_PROVIDERS.md) integration and reported per-model.
 
-## Architecture
+| Benchmark | Measurement | Method |
+|---|---|---|
+| Response quality | Human-annotated score (1–5) | Sample 200 prompts from eval suite |
+| Instruction following | Binary pass/fail on constraint tests | Eval Harness governance suite |
+| Tool use accuracy | Correct tool selection rate | 50 multi-step tool-use scenarios |
+| Output consistency | Semantic similarity across 5 runs | Embedding cosine similarity > 0.92 |
 
-```mermaid
-flowchart LR
-  IN([Input]) --> SUB[Benchmarks]
-  SUB --> CTX[(Shared Context Engine)]
-  SUB --> GUARD{Architecture Guardian}
-  GUARD -->|ok| OUT([Output])
-  GUARD -->|veto| SUB
+Results feed into the [Model Routing Policy](./MODEL_ROUTING_POLICY.md) to select optimal providers per task class.
+
+## Task Benchmarks
+
+| Benchmark | Description | Target |
+|---|---|---|
+| E2E run completion | Multi-step coding task from intake to merge | > 85% pass rate |
+| Multi-agent coordination | 3-agent task with shared context | < 15% coordination overhead |
+| Merge correctness | PR merge without conflicts or regressions | > 95% clean merge rate |
+| Regression detection | Existing tests still pass after change | 100% |
+
+## Running Benchmarks
+
+```bash
+aidevos benchmark run system      # all system benchmarks
+aidevos benchmark run model        # all model benchmarks
+aidevos benchmark run task         # all task benchmarks
+aidevos benchmark run <suite> --verbose   # detailed per-test output
+aidevos benchmark list             # list available suites and tests
 ```
 
-The subsystem is stateless at the process boundary; all durable state lives in the [Persistent Memory](./PERSISTENT_MEMORY.md) tier and is projected on demand.
+Results are written to `~/.aidevos/benchmarks/<run_id>/` as JSON and can be compared with `aidevos benchmark diff <run_a> <run_b>`.
 
-## Interfaces
+## Publishing Results
 
-- See related subsystems for the concrete API surface this document constrains.
+Benchmark results are published with each release:
 
-All interfaces follow the envelope defined in [Agent Communication](./AGENT_COMMUNICATION.md) and the error contract defined in [API Spec](./API_SPEC.md).
+1. Run `aidevos benchmark run all` on the reference hardware (see Environment below).
+2. Results are stored in `benchmarks/<version>/` in the release artifact.
+3. A summary table is included in the [Changelog](./CHANGELOG.md) under the release notes.
+4. Historical results are queryable via `aidevos benchmark history --suite <suite>`.
 
-## Data Model
+## Benchmark Environment Requirements
 
-- Entities and fields are declared in the referenced subsystems and in [DATABASE](./DATABASE.md).
+| Requirement | Specification |
+|---|---|
+| CPU | 16+ cores, x86_64 / ARM64 |
+| RAM | 32 GB minimum |
+| GPU | NVIDIA A100 40 GB or equivalent (for model benchmarks) |
+| Disk | NVMe SSD, 500 GB free |
+| OS | Ubuntu 22.04 or macOS 14+ |
+| Python | 3.11+ |
 
-Retention and encryption rules are inherited from [Data Retention](./DATA_RETENTION.md) and [Encryption](./ENCRYPTION.md).
+System benchmarks run on CPU only. Model benchmarks require GPU. All benchmarks MUST be run in an isolated environment with no other load.
 
-## Failure Modes
+## Interpreting Results
 
-- Every failure surfaces through the Shared Context Engine and the audit log.
-- Degradation is preferred over hard failure whenever safety permits.
+Benchmark results are reported as JSON with the following structure:
 
-Every failure emits a structured event on the Shared Context Engine and is recorded in the [Audit Log](./AUDIT_LOG.md).
+```json
+{
+  "suite": "system",
+  "run_id": "20260722_153042_abc123",
+  "environment": { "cpu": "AMD EPYC 7763", "ram_gb": 64, "gpu": "A100-40GB" },
+  "tests": [
+    { "name": "kernel_loop_latency", "metric": "p99", "value_ms": 3200, "target_ms": 5000, "pass": true }
+  ]
+}
+```
 
-## Security Considerations
+Use `aidevos benchmark diff <run_a> <run_b>` to compare two runs. A regression is flagged when a metric degrades by > 10% from the baseline run.
 
-- Trust boundary: crosses only through signed envelopes (see [Security Model](./SECURITY_MODEL.md)).
-- Secrets are read from [Secrets Management](./SECRETS_MANAGEMENT.md); never inlined.
-- All external calls go through [Model Providers](./MODEL_PROVIDERS.md) or the [Plugin SDK](./PLUGIN_SDK.md) — no ad-hoc network access.
+## Custom Benchmarks
 
-## Observability
+Benchmark suites are defined as YAML files in `benchmarks/suites/`:
 
-- Metrics, traces, and logs conform to [Observability](./OBSERVABILITY.md), [Tracing](./TRACING.md), and [Logging](./LOGGING.md).
-- Every run carries a `correlation_id` propagated from the Kernel.
+```yaml
+name: custom_system
+tests:
+  - name: kernel_loop_latency
+    metric: p99
+    target_ms: 5000
+  - name: sce_publish_throughput
+    metric: events_per_second
+    target: 1000
+```
 
-## Acceptance Criteria
-
-- The contracts above are testable via the [Eval Harness](./EVAL_HARNESS.md).
-- A change to this document requires a matching update to any dependent doc listed in *Related Documents*.
-
-## Open Questions
-
-- _Track open questions as ADRs under [templates/ADR](../templates/ADR.md)._
+Run with `aidevos benchmark run custom_system --suite-file ./benchmarks/suites/custom.yaml`.
 
 ## Related Documents
 
-- [System Overview](./SYSTEM_OVERVIEW.md)
-- [Main Ai Kernel](./MAIN_AI_KERNEL.md)
-- [Prd](./PRD.md)
-- [Trd](./TRD.md)
-- [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)
+- [Eval Harness](./EVAL_HARNESS.md) — structured evaluation of prompt and model outputs
+- [Testing Strategy](./TESTING_STRATEGY.md) — unit, integration, and regression tests
+- [Performance](./PERFORMANCE.md) — performance characteristics and optimization guide
+- [Reliability](./RELIABILITY.md) — fault tolerance and uptime guarantees
+- [Observability](./OBSERVABILITY.md) — metrics pipeline and dashboards
+- [Model Routing Policy](./MODEL_ROUTING_POLICY.md) — how benchmark results influence provider selection

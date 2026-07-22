@@ -1,88 +1,153 @@
 # Versioning
 
-> Specification for the Versioning subsystem of the AI Development Operating System. This document is normative — implementations MUST satisfy every MUST clause below.
+> Versioning strategy for AI Dev OS. Covers the platform binary, REST and WebSocket APIs, prompts, documentation, data schema, and provider adapters. All versioning follows [Semantic Versioning 2.0.0](https://semver.org/) unless otherwise noted.
 
 ## Overview
 
-Versioning is a first-class subsystem of the AI Development Operating System (AI Dev OS). It participates in the Kernel's intake → plan → route → execute → critique → merge → guard → deliver loop and communicates exclusively through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md). This document defines its purpose, contracts, invariants, and failure modes so that AI agents can reason about it without inspecting any implementation.
+AI Dev OS tracks six independent versioned surfaces. Each surface has its own cadence and scope, but all are released together in a coordinated release bundle. The six surfaces are:
 
-## Goals
+| Surface | Version source | Example |
+|---------|---------------|---------|
+| Platform (CLI/backend) | `aidevos version` | `0.1.0` |
+| REST API | URL path prefix | `/v1/` |
+| WebSocket API | Connection handshake | `version: 1` |
+| Prompts | Front matter `version` field | `0.1.0` |
+| Documentation | `docs/README.md` front matter | `0.1.0` |
+| Data schema | SQLite `PRAGMA user_version` | `1` |
 
-- Provide an authoritative, unambiguous specification for this subsystem.
-- Define contracts, invariants, and acceptance criteria consumed by AI agents.
-- Stay small enough to review, large enough to remove ambiguity.
+No two surfaces share a version number unless they are intentionally lockstepped in a coordinated release.
 
-## Non-Goals
+## Platform Versioning
 
-- Implementation code — this repository is documentation-only (see [AI Coding Rules](./AI_CODING_RULES.md)).
-- Vendor-specific tuning beyond what [Model Providers](./MODEL_PROVIDERS.md) allows.
-- Duplicating contracts that belong to another subsystem; link instead.
+The CLI and backend binary share a single version string: `MAJOR.MINOR.PATCH` with optional pre-release tags.
 
-## Requirements
+- **MAJOR** — breaking CLI flag/command removal, breaking config format changes, removal of a deprecated subsystem.
+- **MINOR** — new commands, new flags, new subsystems, new provider adapters, non-breaking feature additions.
+- **PATCH** — bug fixes, performance improvements, documentation regenerations, dependency bumps with no behavioral change.
 
-- **MUST** be consumable by both humans and AI agents.
-- **MUST** publish every state change to the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md).
-- **MUST** pass every rule enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
-- **MUST** be observable through the metrics defined in [Observability](./OBSERVABILITY.md).
-- **SHOULD** degrade gracefully rather than fail hard.
-- **MAY** be extended via the [Plugin SDK](./PLUGIN_SDK.md) when the extension point is declared here.
+Pre-release tags follow the semver convention: `0.1.0-alpha.1`, `0.1.0-beta.1`, `0.1.0-rc.1`. Pre-release versions are excluded from the "latest" stability guarantee.
 
-## Architecture
+The platform version is printed by `aidevos version` and embedded in user-agent strings for all outbound HTTP requests.
 
-```mermaid
-flowchart LR
-  IN([Input]) --> SUB[Versioning]
-  SUB --> CTX[(Shared Context Engine)]
-  SUB --> GUARD{Architecture Guardian}
-  GUARD -->|ok| OUT([Output])
-  GUARD -->|veto| SUB
+## API Versioning
+
+### REST API
+
+The REST API is versioned by URL path prefix: `/v1/models`, `/v1/runs`, `/v2/models`. The version in the path refers to the API contract only — it is independent of the platform version.
+
+- A new API version is created when existing endpoints change in a backward-incompatible way.
+- The previous API version is deprecated for one minor release cycle before removal.
+- All API versions are documented in [API Spec](./API_SPEC.md).
+
+### WebSocket API
+
+The WebSocket API is versioned in the connection handshake. The client sends a `version: N` field in the connection payload. The server responds with `version: N, accepted: true/false`.
+
+- Version `1` corresponds to the initial WebSocket contract (Phase 1–3).
+- Version negotiation is handled at connection time; mismatched versions receive a `version_mismatch` error frame and the connection is closed.
+
+### MCP
+
+The Model Context Protocol follows upstream versioning. AI Dev OS documents which MCP spec version is supported in [MCP.md](./MCP.md). No separate version is maintained.
+
+## Prompt Versioning
+
+Every prompt file under `prompts/` carries a `version` field in its YAML front matter:
+
+```yaml
+---
+role: kernel
+version: 0.1.0
+updated: 2025-07-22
+---
 ```
 
-The subsystem is stateless at the process boundary; all durable state lives in the [Persistent Memory](./PERSISTENT_MEMORY.md) tier and is projected on demand.
+The `MASTER_PROMPT` version is part of the Kernel identity — it is printed in `aidevos doctor` and logged at startup. A prompt version bump is required whenever:
 
-## Interfaces
+- A prompt's instruction set changes in a way that alters agent behavior.
+- A prompt's output format changes.
+- A prompt is removed or replaced.
 
-- See related subsystems for the concrete API surface this document constrains.
+Prompt versions are independent of the platform version. A single platform release may update zero, one, or many prompts.
 
-All interfaces follow the envelope defined in [Agent Communication](./AGENT_COMMUNICATION.md) and the error contract defined in [API Spec](./API_SPEC.md).
+## Documentation Versioning
 
-## Data Model
+The documentation vault at `docs/` is versioned in `docs/README.md` front matter:
 
-- Entities and fields are declared in the referenced subsystems and in [DATABASE](./DATABASE.md).
+```yaml
+---
+title: AI Dev OS Documentation
+version: 0.1.0
+updated: 2025-07-22
+---
+```
 
-Retention and encryption rules are inherited from [Data Retention](./DATA_RETENTION.md) and [Encryption](./ENCRYPTION.md).
+- **PATCH** — typo fixes, link updates, formatting changes, new examples.
+- **MINOR** — new documents, new sections in existing documents, significant rewrites that do not break existing cross-references.
+- **MAJOR** — document removal, section removal that breaks cross-references, structural reorganization that breaks links.
 
-## Failure Modes
+Documentation version is decoupled from platform version but is tagged in the same release.
 
-- Every failure surfaces through the Shared Context Engine and the audit log.
-- Degradation is preferred over hard failure whenever safety permits.
+## Data Schema Versioning
 
-Every failure emits a structured event on the Shared Context Engine and is recorded in the [Audit Log](./AUDIT_LOG.md).
+The SQLite database schema version is stored in `PRAGMA user_version` as an integer. Migration files live in `migrations/` and follow the naming convention `{from_version}_{to_version}_{description}.sql`.
 
-## Security Considerations
+- Schema version `1` is the initial schema (Phase 1).
+- Each migration bumps `user_version` by exactly 1.
+- Backward compatibility is maintained for 2 minor platform versions. A database opened by platform version `X.Y` MUST be readable by platform version `X.(Y+1)` and `X.(Y+2)` without migration.
+- Schema upgrades are applied automatically on `aidevos init` and `aidevos doctor`. Downgrades are not supported — a warning is printed if the database is newer than the binary.
 
-- Trust boundary: crosses only through signed envelopes (see [Security Model](./SECURITY_MODEL.md)).
-- Secrets are read from [Secrets Management](./SECRETS_MANAGEMENT.md); never inlined.
-- All external calls go through [Model Providers](./MODEL_PROVIDERS.md) or the [Plugin SDK](./PLUGIN_SDK.md) — no ad-hoc network access.
+## Provider Adapter Versioning
 
-## Observability
+Each provider adapter (OpenAI, Anthropic, Ollama, etc.) has its own version string declared in its adapter module. Adapter versions are independent of the platform version.
 
-- Metrics, traces, and logs conform to [Observability](./OBSERVABILITY.md), [Tracing](./TRACING.md), and [Logging](./LOGGING.md).
-- Every run carries a `correlation_id` propagated from the Kernel.
+```json
+{
+  "provider": "openai",
+  "adapter_version": "1.2.3",
+  "min_platform_version": "0.1.0"
+}
+```
 
-## Acceptance Criteria
+An adapter's `min_platform_version` declares the oldest platform release it is compatible with. The Nine Router checks this at registration time and logs a warning if the platform is too old.
 
-- The contracts above are testable via the [Eval Harness](./EVAL_HARNESS.md).
-- A change to this document requires a matching update to any dependent doc listed in *Related Documents*.
+## Changelog Location
 
-## Open Questions
+The authoritative changelog lives at [CHANGELOG.md](./CHANGELOG.md) in the repository root. It follows the [Keep a Changelog](https://keepachangelog.com/) format and covers all six versioned surfaces. Each platform release adds a new entry; prompt-only or doc-only patches may be grouped.
 
-- _Track open questions as ADRs under [templates/ADR](../templates/ADR.md)._
+## Breaking Change Policy
+
+| Change type | Bump | Surface |
+|-------------|------|---------|
+| API endpoint removed or renamed | MAJOR | REST API |
+| API request/response schema changed | MAJOR | REST API |
+| Database schema backward-incompatible change | MAJOR | Data Schema |
+| Prompt output format changed | MAJOR | Prompt |
+| CLI command or flag removed | MAJOR | Platform |
+| New API endpoint added | MINOR | REST API |
+| New CLI command added | MINOR | Platform |
+| New prompt added | MINOR | Prompt |
+| Bug fix with no contract change | PATCH | All |
+
+Breaking changes across multiple surfaces are batched into a single MAJOR release whenever possible.
+
+## Relationship to Releases
+
+Every release tag encodes both the platform version and the documentation version:
+
+```
+v0.1.0+docs.0.1.0
+```
+
+The release build pipeline (see [Release Process](./RELEASE_PROCESS.md)) produces:
+- Platform binaries tagged with `v{platform_version}`
+- Documentation archive tagged with the same release tag
+- CHANGELOG entry covering all surface changes
 
 ## Related Documents
 
-- [System Overview](./SYSTEM_OVERVIEW.md)
-- [Main Ai Kernel](./MAIN_AI_KERNEL.md)
-- [Prd](./PRD.md)
-- [Trd](./TRD.md)
-- [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)
+- [Release Process](./RELEASE_PROCESS.md)
+- [CHANGELOG](./CHANGELOG.md)
+- [Migration Guide](./MIGRATION_GUIDE.md)
+- [Upgrade Notes](./UPGRADE_NOTES.md)
+- [API Spec](./API_SPEC.md)

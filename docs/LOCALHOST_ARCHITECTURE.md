@@ -1,89 +1,173 @@
 # Localhost Architecture
 
-> Specification for the local-first deployment topology. This document is normative — implementations MUST satisfy every MUST clause below.
+> **Domain:** Local-First Deployment Topology
+> **Applies to:** CLI, Backend Process, All Subsystems
+> **Last updated:** 2026-07-22
 
 ## Overview
 
-Localhost Architecture is a first-class subsystem of the AI Development Operating System (AI Dev OS). It participates in the Kernel's intake → plan → route → execute → critique → merge → guard → deliver loop and communicates exclusively through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md). This document defines its purpose, contracts, invariants, and failure modes so that AI agents can reason about it without inspecting any implementation.
+AI Dev OS is designed to run entirely on **localhost** with no external dependencies. All components — the Kernel, SCE event bus, memory stores, vector index, graph engine, and model provider proxies — run in a single backend process on the user's machine. The CLI communicates with the backend over a local IPC channel.
 
-## Goals
-
-- Runs entirely on the user's machine when configured to.
-- Optional remote providers reached over HTTPS only.
-- No telemetry unless explicitly enabled.
-
-## Non-Goals
-
-- Implementation code — this repository is documentation-only (see [AI Coding Rules](./AI_CODING_RULES.md)).
-- Vendor-specific tuning beyond what [Model Providers](./MODEL_PROVIDERS.md) allows.
-- Duplicating contracts that belong to another subsystem; link instead.
-
-## Requirements
-
-- **MUST** be consumable by both humans and AI agents.
-- **MUST** publish every state change to the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md).
-- **MUST** pass every rule enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
-- **MUST** be observable through the metrics defined in [Observability](./OBSERVABILITY.md).
-- **SHOULD** degrade gracefully rather than fail hard.
-- **MAY** be extended via the [Plugin SDK](./PLUGIN_SDK.md) when the extension point is declared here.
-
-## Architecture
-
-```mermaid
-flowchart LR
-  IN([Input]) --> SUB[Localhost Architecture]
-  SUB --> CTX[(Shared Context Engine)]
-  SUB --> GUARD{Architecture Guardian}
-  GUARD -->|ok| OUT([Output])
-  GUARD -->|veto| SUB
+```
+┌─────────────────────────────────────────────────────────────┐
+│  User Machine                                                │
+│                                                              │
+│  ┌──────────┐              ┌──────────────────────────────┐  │
+│  │   CLI    │  IPC (mTLS)  │      Backend Process          │  │
+│  │          │◄────────────►│                              │  │
+│  │ agent    │              │  ┌────────┐ ┌──────────────┐ │  │
+│  │ chat     │              │  │ HTTP   │ │ Kernel Loop  │ │  │
+│  │ project  │              │  │ Server │ │ (event      │ │  │
+│  │ config   │              │  │ :PORT  │ │  driven)    │ │  │
+│  └──────────┘              │  └────────┘ └──────┬───────┘ │  │
+│                            │                     │         │  │
+│                            │  ┌──────────────────┼───────┐ │  │
+│                            │  │    AI Group      │       │ │  │
+│                            │  │    System        │       │ │  │
+│                            │  │  ┌───────────────┴────┐  │ │  │
+│                            │  │  │  Agent Pool        │  │ │  │
+│                            │  │  │  (Worker Processes)│  │ │  │
+│                            │  │  └────────────────────┘  │ │  │
+│                            │  └──────────────────────────┘ │  │
+│                            │                              │  │
+│                            │  ┌────────┐ ┌──────────────┐ │  │
+│                            │  │  SCE   │ │ Persistent   │ │  │
+│                            │  │ Broker │ │ Memory       │ │  │
+│                            │  └────────┘ └──────────────┘ │  │
+│                            │                              │  │
+│                            │  ┌────────┐ ┌──────────────┐ │  │
+│                            │  │Obsidian│ │ Model        │ │  │
+│                            │  │ Graph  │ │ Provider     │ │  │
+│                            │  │ Engine │ │ Proxies      │ │  │
+│                            │  └────────┘ └──────────────┘ │  │
+│                            └──────────────────────────────┘  │
+│                                                              │
+│  ~/.aidevos/                              Remote (optional)  │
+│  ├── data/              ┌──────────────────────────────┐    │
+│  ├── config.toml        │  Model Providers              │    │
+│  ├── logs/              │  OpenAI / Anthropic / etc.   │    │
+│  └── cache/             │  HTTPS only, TLS 1.3         │    │
+│                          └──────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-The subsystem is stateless at the process boundary; all durable state lives in the [Persistent Memory](./PERSISTENT_MEMORY.md) tier and is projected on demand.
+## Process Architecture
 
-## Interfaces
+The backend process is a single OS process with multiple subsystems running as async tasks or threads:
 
-- Backend on `127.0.0.1:PORT`; frontend connects over WebSocket.
+| Component | Role | Thread Model |
+|-----------|------|-------------|
+| **HTTP Server** | Exposes REST + WebSocket API for CLI communication. | Async (tokio). One listener thread. |
+| **Kernel Loop** | Event-driven main loop. Dispatches agent requests, manages lifecycle. | Single-threaded async. |
+| **AI Group System** | Spawns and supervises agent worker processes. | Per-group supervisor thread. |
+| **Agent Pool** | Child processes (one per agent) running the model inference loop. | Separate OS processes. |
+| **SCE Broker** | In-memory event bus. Topics for audit, coordination, shared memory. | In-process async channel. |
+| **Persistent Memory** | Encrypted SQLite + usearch vector index. | Single writer thread, async readers. |
+| **Obsidian Graph Engine** | Caching graph database over the Knowledge System. | Async, shared threadpool. |
+| **Model Provider Proxies** | HTTP clients to OpenAI, Anthropic, Ollama, etc. | Async HTTP pool. |
 
-All interfaces follow the envelope defined in [Agent Communication](./AGENT_COMMUNICATION.md) and the error contract defined in [API Spec](./API_SPEC.md).
+## IPC Between CLI and Backend
 
-## Data Model
+| Platform | Transport | Authentication |
+|----------|-----------|---------------|
+| **Linux / macOS** | Unix domain socket (`~/.aidevos/run/aidevos.sock`) | SO_PEERCRED (peer PID/UID verification) + mTLS |
+| **Windows** | Named pipe (`\\.\pipe\aidevos-<workspace_id>`) | Named pipe impersonation level + mTLS |
 
-- Config at `~/.aidevos/`; data at `~/.aidevos/data/`.
+All IPC traffic is encrypted with mTLS using a self-signed CA generated at first startup. The CLI verifies the backend's certificate fingerprint against `~/.aidevos/config.toml`.
 
-Retention and encryption rules are inherited from [Data Retention](./DATA_RETENTION.md) and [Encryption](./ENCRYPTION.md).
+## Port Allocation
 
-## Failure Modes
+The HTTP server binds to `localhost:<PORT>`:
 
-- Port conflict → auto-select next free port and update config.
+1. Default port: **12420** (chosen to avoid conflicts with common daemons).
+2. On conflict: auto-increment until a free port is found (max 5 attempts).
+3. The chosen port is written to `~/.aidevos/run/port` so the CLI can discover it.
 
-Every failure emits a structured event on the Shared Context Engine and is recorded in the [Audit Log](./AUDIT_LOG.md).
+All ports bind to **127.0.0.1 only** — no external network exposure.
 
-## Security Considerations
+## Filesystem Layout
 
-- Trust boundary: crosses only through signed envelopes (see [Security Model](./SECURITY_MODEL.md)).
-- Secrets are read from [Secrets Management](./SECRETS_MANAGEMENT.md); never inlined.
-- All external calls go through [Model Providers](./MODEL_PROVIDERS.md) or the [Plugin SDK](./PLUGIN_SDK.md) — no ad-hoc network access.
+```
+~/.aidevos/
+├── config.toml              # Global configuration (keys, defaults, providers)
+├── run/
+│   ├── aidevos.sock         # Unix domain socket (Linux/macOS)
+│   ├── aidevos.pipe         # Named pipe (Windows)
+│   └── port                 # Port file (discovery)
+├── data/
+│   ├── <workspace_id>/
+│   │   ├── config.toml      # Workspace-specific config
+│   │   ├── main.kb/         # Main Knowledge Base (SQLite)
+│   │   ├── global.kb/       # Global Knowledge Base (SQLite)
+│   │   ├── persistent_memory/  # Encrypted memory store
+│   │   ├── vector_index.usearch # HNSW vector index
+│   │   └── vectors.db       # Vector relational store
+│   └── ...
+├── logs/
+│   ├── aidevos.log          # Main application log
+│   ├── audit.log            # Security audit log (append-only)
+│   └── crash/               # Crash reports
+└── cache/
+    ├── embeddings/           # Embedding cache
+    └── models/              # Downloaded model files (Ollama)
+```
 
-## Observability
+## Startup Sequence
 
-- Metrics, traces, and logs conform to [Observability](./OBSERVABILITY.md), [Tracing](./TRACING.md), and [Logging](./LOGGING.md).
-- Every run carries a `correlation_id` propagated from the Kernel.
+1. **Load config** — Read `~/.aidevos/config.toml`. Create default if absent.
+2. **Generate identity** — If no Ed25519 key exists, generate one. Store in OS keychain.
+3. **Allocate port** — Bind HTTP server to `localhost:PORT`. Write port file.
+4. **Open IPC** — Create Unix socket / named pipe. Set permissions to 0700.
+5. **Initialize stores** — Open Persistent Memory, vector index, Knowledge Bases.
+6. **Load workspace** — Find default workspace or prompt user to create one.
+7. **Start SCE** — Initialize in-memory event broker.
+8. **Warm caches** — Preload embedding cache, graph engine cache.
+9. **Signal ready** — Write PID file to `~/.aidevos/run/aidevos.pid`. CLI can now connect.
 
-## Acceptance Criteria
+Total time: **< 500ms** on modern hardware (SSD, 16 GB RAM).
 
-- The contracts above are testable via the [Eval Harness](./EVAL_HARNESS.md).
-- A change to this document requires a matching update to any dependent doc listed in *Related Documents*.
+## Shutdown Sequence
 
-## Open Questions
+1. **Signal workers** — Send graceful shutdown to all agent processes (SIGTERM, then SIGKILL after 5s).
+2. **Flush stores** — Sync Persistent Memory, vector index, Knowledge Bases to disk.
+3. **Close IPC** — Remove Unix socket / named pipe.
+4. **Stop HTTP** — Graceful HTTP shutdown (drain in-flight requests, max 10s).
+5. **Seal vault** — Encrypt and seal the Secrets Vault.
+6. **Remove PID file** — Clean up `~/.aidevos/run/aidevos.pid`.
 
-- _Track open questions as ADRs under [templates/ADR](../templates/ADR.md)._
+## Resource Limits
+
+| Resource | Default | Configuration |
+|----------|---------|---------------|
+| **Memory** | 4 GB (soft), 8 GB (hard) | `[resources].memory_soft` / `memory_hard` |
+| **CPU** | 4 cores (soft), 8 cores (hard) | `[resources].cpu_soft` / `cpu_hard` |
+| **Disk** | 10 GB (per workspace) | `[resources].disk_max_gb` |
+| **File descriptors** | 4096 | `[resources].fd_limit` |
+| **Agent processes** | 8 | `[resources].max_agents` |
+
+## Optional Remote Provider Access
+
+- Model providers (OpenAI, Anthropic, etc.) are called over **HTTPS (TLS 1.3)** only.
+- No inbound network access. AI Dev OS never listens on a non-loopback interface.
+- API keys are stored in the encrypted Secrets Vault and never logged.
+
+## Offline Guarantees
+
+| Capability | Offline? | Notes |
+|------------|----------|-------|
+| Local models (Ollama) | ✅ Full | All core functionality works. |
+| Persistent Memory | ✅ Full | Encrypted SQLite + local vector index. |
+| Knowledge System | ✅ Full | Local FTS5 + Obsidian graph. |
+| Agent execution | ✅ Full | Uses local models. |
+| Remote models | ❌ | Requires network. Falls back to local models. |
+| Cross-workspace bridge | ⚠️ | Works within same machine; network bridge requires network. |
 
 ## Related Documents
 
-- [Backend](./BACKEND.md)
-- [Deployment](./DEPLOYMENT.md)
-- [Local Dev](./LOCAL_DEV.md)
-- [Privacy](./PRIVACY.md)
-- [System Overview](./SYSTEM_OVERVIEW.md)
-- [Main Ai Kernel](./MAIN_AI_KERNEL.md)
-- [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)
+| Document | Description |
+|----------|-------------|
+| [Backend](BACKEND.md) | Backend process architecture and lifecycle |
+| [Deployment](DEPLOYMENT.md) | Production deployment guide |
+| [CLI](CLI.md) | Command-line interface reference |
+| [Folder Structures](FOLDER_STRUCTURES.md) | Complete filesystem layout |
+| [Local Dev](LOCAL_DEV.md) | Development environment setup |

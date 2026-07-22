@@ -1,88 +1,104 @@
 # Compliance
 
-> Specification for the Compliance subsystem of the AI Development Operating System. This document is normative — implementations MUST satisfy every MUST clause below.
+> Compliance considerations for AI Dev OS deployments.
 
 ## Overview
 
-Compliance is a first-class subsystem of the AI Development Operating System (AI Dev OS). It participates in the Kernel's intake → plan → route → execute → critique → merge → guard → deliver loop and communicates exclusively through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md). This document defines its purpose, contracts, invariants, and failure modes so that AI agents can reason about it without inspecting any implementation.
+AI Dev OS is a local-first development tool. It does not itself process
+personal data on a central server, and it does not require a cloud service
+to operate. However, compliance with regulations such as GDPR, SOC 2, and
+CCPA depends on how the tool is deployed, configured, and used within an
+organisation. This document describes the built-in features that support
+compliance programmes and the limitations that deployers must address
+independently.
 
-## Goals
+## Built-in Compliance Features
 
-- Provide an authoritative, unambiguous specification for this subsystem.
-- Define contracts, invariants, and acceptance criteria consumed by AI agents.
-- Stay small enough to review, large enough to remove ambiguity.
+| Feature | Description | Relevant Standard |
+|---|---|---|
+| **Audit log** | Append-only, hash-chained log of all security-relevant operations. Tamper-evident: any modification breaks the hash chain. | SOC 2, GDPR (Art. 30) |
+| **RBAC** | Role-based access control with fine-grained capabilities. Every action is tied to an authenticated actor. | SOC 2 (CC6, CC7) |
+| **Tenant isolation** | Workspaces are cryptographically isolated. No workspace can read another's data without the corresponding key. | SOC 2 (CC6) |
+| **Data retention controls** | Per-category TTLs, automated pruning, and manual flush commands. | GDPR (Art. 5(1)(e)) |
+| **Encryption at rest** | AES-256-GCM for memory records, age for config, SQLite cipher for databases. | SOC 2 (CC6) |
+| **Encryption in transit** | TLS 1.3 for all remote communication. | SOC 2 (CC6) |
+| **Export API** | `workspace export` produces a portable archive of all workspace data in JSON. | GDPR (Art. 20) |
+| **Data deletion** | `workspace delete` removes all local data for a workspace. Telemetry data can be deleted on the server side. | GDPR (Art. 17) |
 
-## Non-Goals
+## GDPR Readiness
 
-- Implementation code — this repository is documentation-only (see [AI Coding Rules](./AI_CODING_RULES.md)).
-- Vendor-specific tuning beyond what [Model Providers](./MODEL_PROVIDERS.md) allows.
-- Duplicating contracts that belong to another subsystem; link instead.
+| Requirement | AI Dev OS Support |
+|---|---|
+| **Right to be informed** | [Privacy](PRIVACY.md) document describes exactly what data is collected and why. |
+| **Right of access** | Users can view all stored data via the CLI or by reading local files directly. |
+| **Right to rectification** | All config and memory records are editable. |
+| **Right to erasure** | `workspace delete` removes all local data. Telemetry data deletion is handled by the telemetry backend. |
+| **Right to data portability** | `workspace export` produces a JSON archive that can be imported into any system. |
+| **Data Processing Record** | The audit log serves as a record of processing activities (GDPR Art. 30). Every data access, modification, and export is recorded. |
+| **DPA readiness** | AI Dev OS does not act as a processor; the user's chosen model providers and cloud infrastructure providers may require a DPA. |
 
-## Requirements
+### Practical Steps for GDPR Compliance
 
-- **MUST** be consumable by both humans and AI agents.
-- **MUST** publish every state change to the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md).
-- **MUST** pass every rule enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
-- **MUST** be observable through the metrics defined in [Observability](./OBSERVABILITY.md).
-- **SHOULD** degrade gracefully rather than fail hard.
-- **MAY** be extended via the [Plugin SDK](./PLUGIN_SDK.md) when the extension point is declared here.
+1. Publish the [Privacy](PRIVACY.md) document to end users.
+2. Configure telemetry as disabled (default) or obtain explicit consent
+   before enabling.
+3. Review the model provider's DPA for any remote model APIs used.
+4. Set data retention TTLs in `workspace config` to match the
+   organisation's retention schedule.
+5. Use `workspace export` to fulfil data portability requests.
 
-## Architecture
+## SOC 2 Readiness
 
-```mermaid
-flowchart LR
-  IN([Input]) --> SUB[Compliance]
-  SUB --> CTX[(Shared Context Engine)]
-  SUB --> GUARD{Architecture Guardian}
-  GUARD -->|ok| OUT([Output])
-  GUARD -->|veto| SUB
-```
+| Trust Service Criteria | AI Dev OS Support | Gap / Action Required |
+|---|---|---|
+| **CC6 — Logical and Physical Access** | RBAC, encryption at rest and in transit, OS keychain integration | Deployers must manage OS-level access controls and keychain backup policies |
+| **CC7 — System Operations** | Audit log, health check API, metrics endpoint | Deployers must configure monitoring and alerting on audit log anomalies |
+| **CC8 — Change Management** | Configuration versioning, workspace snapshots, rollback support | Deployers must establish a change approval process for production workspaces |
+| **CC9 — Risk Mitigation** | Vendor risk is limited to model/search providers the user connects | Deployers must assess third-party providers independently |
 
-The subsystem is stateless at the process boundary; all durable state lives in the [Persistent Memory](./PERSISTENT_MEMORY.md) tier and is projected on demand.
+The audit log is the primary evidence source for SOC 2 examinations. It
+should be exported to a SIEM and retained according to the organisation's
+retention policy.
 
-## Interfaces
+## Enterprise Features
 
-- See related subsystems for the concrete API surface this document constrains.
+| Feature | Availability | Compliance Benefit |
+|---|---|---|
+| **SSO / SAML** | Via OIDC-compatible identity provider | Centralised access control and user lifecycle management |
+| **Audit log export to SIEM** | JSON streaming to stdout or file; syslog forwarding | Real-time monitoring and alerting |
+| **Legal hold** | Workspace snapshots can be frozen (read-only) to preserve data for litigation | Prevents spoliation during legal proceedings |
+| **Region-specific deployment** | Data stays on local infrastructure; no mandatory cloud dependency | Data residency control |
 
-All interfaces follow the envelope defined in [Agent Communication](./AGENT_COMMUNICATION.md) and the error contract defined in [API Spec](./API_SPEC.md).
+## Limitations
 
-## Data Model
+> **AI Dev OS is a tool. Compliance is a practice.**
 
-- Entities and fields are declared in the referenced subsystems and in [DATABASE](./DATABASE.md).
+1. **Third-party model providers.** When AI Dev OS sends a prompt to a
+   remote model provider, that provider processes the data on its own
+   infrastructure. The organisation is responsible for ensuring that the
+   provider has appropriate safeguards (DPA, data region, etc.). AI Dev OS
+   recommends using providers that offer data retention opt-out and
+   zero-data-retention APIs.
 
-Retention and encryption rules are inherited from [Data Retention](./DATA_RETENTION.md) and [Encryption](./ENCRYPTION.md).
+2. **Search providers.** Web search queries are sent to the configured
+   search provider. Organisations in regulated industries should use a
+   self-hosted or enterprise search endpoint.
 
-## Failure Modes
+3. **No built-in data classification.** AI Dev OS does not inspect or label
+   data for sensitivity. Deployers should implement data classification at
+   the policy level (e.g. restrict which workspaces can connect to which
+   providers).
 
-- Every failure surfaces through the Shared Context Engine and the audit log.
-- Degradation is preferred over hard failure whenever safety permits.
-
-Every failure emits a structured event on the Shared Context Engine and is recorded in the [Audit Log](./AUDIT_LOG.md).
-
-## Security Considerations
-
-- Trust boundary: crosses only through signed envelopes (see [Security Model](./SECURITY_MODEL.md)).
-- Secrets are read from [Secrets Management](./SECRETS_MANAGEMENT.md); never inlined.
-- All external calls go through [Model Providers](./MODEL_PROVIDERS.md) or the [Plugin SDK](./PLUGIN_SDK.md) — no ad-hoc network access.
-
-## Observability
-
-- Metrics, traces, and logs conform to [Observability](./OBSERVABILITY.md), [Tracing](./TRACING.md), and [Logging](./LOGGING.md).
-- Every run carries a `correlation_id` propagated from the Kernel.
-
-## Acceptance Criteria
-
-- The contracts above are testable via the [Eval Harness](./EVAL_HARNESS.md).
-- A change to this document requires a matching update to any dependent doc listed in *Related Documents*.
-
-## Open Questions
-
-- _Track open questions as ADRs under [templates/ADR](../templates/ADR.md)._
+4. **Audit log is local by default.** For compliance in multi-user or
+   server deployments, the audit log must be forwarded to a central SIEM or
+   immutable storage.
 
 ## Related Documents
 
-- [System Overview](./SYSTEM_OVERVIEW.md)
-- [Main Ai Kernel](./MAIN_AI_KERNEL.md)
-- [Prd](./PRD.md)
-- [Trd](./TRD.md)
-- [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)
+- [Privacy](PRIVACY.md) — what data is collected and transmitted
+- [Security Model](SECURITY_MODEL.md) — threat model and trust boundaries
+- [Data Retention](DATA_RETENTION.md) — retention policies and
+  configuration
+- [Audit Log](AUDIT_LOG.md) — audit log schema and export
+- [Encryption](ENCRYPTION.md) — encryption at rest and in transit
+- [Auth System](AUTH_SYSTEM.md) — RBAC and SSO integration

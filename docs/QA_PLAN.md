@@ -1,88 +1,121 @@
-# Qa Plan
+# QA Plan
 
-> Specification for the Qa Plan subsystem of the AI Development Operating System. This document is normative — implementations MUST satisfy every MUST clause below.
+> Quality assurance plan for AI Dev OS covering functional, integration, prompt quality, security, performance, and reliability testing.
 
 ## Overview
 
-Qa Plan is a first-class subsystem of the AI Development Operating System (AI Dev OS). It participates in the Kernel's intake → plan → route → execute → critique → merge → guard → deliver loop and communicates exclusively through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md). This document defines its purpose, contracts, invariants, and failure modes so that AI agents can reason about it without inspecting any implementation.
+The QA plan defines the testing strategy, environments, release gates, and quality metrics that ensure AI Dev OS releases are reliable, secure, and performant. QA is integrated into the CI/CD pipeline and enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md) as a release gate. Every change MUST pass the appropriate QA gates before merging.
 
-## Goals
+## QA Categories
 
-- Provide an authoritative, unambiguous specification for this subsystem.
-- Define contracts, invariants, and acceptance criteria consumed by AI agents.
-- Stay small enough to review, large enough to remove ambiguity.
+| Category | Focus | Owner |
+|---|---|---|
+| Functional testing | Core subsystem contracts, API correctness | Development team |
+| Integration testing | Cross-subsystem contracts, SCE event flow | Integration team |
+| Prompt quality | Instruction following, output consistency, safety | AI quality team |
+| Security testing | Auth, encryption, secret handling, injection | Security team |
+| Performance testing | Latency targets, throughput, memory, GPU | Performance team |
+| Reliability testing | Fault injection, recovery, degradation paths | Reliability team |
 
-## Non-Goals
+### Functional Testing
 
-- Implementation code — this repository is documentation-only (see [AI Coding Rules](./AI_CODING_RULES.md)).
-- Vendor-specific tuning beyond what [Model Providers](./MODEL_PROVIDERS.md) allows.
-- Duplicating contracts that belong to another subsystem; link instead.
+- Unit tests for every subsystem contract (see [Testing Strategy](./TESTING_STRATEGY.md)).
+- API endpoint tests (happy path + error cases) per [API Spec](./API_SPEC.md).
+- CLI command smoke tests for every `aidevos` subcommand.
 
-## Requirements
+### Integration Testing
 
-- **MUST** be consumable by both humans and AI agents.
-- **MUST** publish every state change to the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md).
-- **MUST** pass every rule enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
-- **MUST** be observable through the metrics defined in [Observability](./OBSERVABILITY.md).
-- **SHOULD** degrade gracefully rather than fail hard.
-- **MAY** be extended via the [Plugin SDK](./PLUGIN_SDK.md) when the extension point is declared here.
+- SCE event propagation across Kernel → Worker → Guardian → Memory.
+- Model provider integration with mock provider responses.
+- Plugin lifecycle: load → init → call → unload.
+- End-to-end run: intake → plan → route → execute → critique → merge → guard → deliver.
 
-## Architecture
+### Prompt Quality
 
-```mermaid
-flowchart LR
-  IN([Input]) --> SUB[Qa Plan]
-  SUB --> CTX[(Shared Context Engine)]
-  SUB --> GUARD{Architecture Guardian}
-  GUARD -->|ok| OUT([Output])
-  GUARD -->|veto| SUB
-```
+- Eval suite from [Eval Harness](./EVAL_HARNESS.md) run against every model provider.
+- Governance rule compliance (see [Prompt Governance](./PROMPT_GOVERNANCE.md)).
+- Safety check: output does not contain prohibited content (see [AI Safety](./AI_SAFETY.md)).
 
-The subsystem is stateless at the process boundary; all durable state lives in the [Persistent Memory](./PERSISTENT_MEMORY.md) tier and is projected on demand.
+### Security Testing
 
-## Interfaces
+- Authentication and authorization bypass attempts (see [Auth System](./AUTH_SYSTEM.md)).
+- Encryption verification: data at rest and in transit (see [Encryption](./ENCRYPTION.md)).
+- Secret injection detection: no secrets in logs or SCE events.
+- Dependency vulnerability scan on every build.
 
-- See related subsystems for the concrete API surface this document constrains.
+### Performance Testing
 
-All interfaces follow the envelope defined in [Agent Communication](./AGENT_COMMUNICATION.md) and the error contract defined in [API Spec](./API_SPEC.md).
+- Benchmarks from [Benchmarks](./BENCHMARKS.md) run on reference hardware.
+- Latency targets from [Performance](./PERFORMANCE.md) — all MUST pass.
+- Memory leak detection: 1-hour soak run with stable RSS.
 
-## Data Model
+### Reliability Testing
 
-- Entities and fields are declared in the referenced subsystems and in [DATABASE](./DATABASE.md).
+- Fault injection: drop SCE events, kill workers, corrupt cache.
+- Recovery: auto-restart, replay, reindex after failure.
+- Degradation: verify graceful degradation when dependencies are unavailable.
 
-Retention and encryption rules are inherited from [Data Retention](./DATA_RETENTION.md) and [Encryption](./ENCRYPTION.md).
+## Test Environments
 
-## Failure Modes
+| Environment | Purpose | Schedule | Data |
+|---|---|---|---|
+| Local dev | Developer iteration | On commit | Synthetic |
+| CI (GitHub Actions) | Pre-merge validation | Per PR | Synthetic |
+| Staging | Pre-release validation | Per release candidate | Anonymized production snapshot |
+| Production canary | Canary deployment monitoring | Continuous | Real (read-only metrics) |
 
-- Every failure surfaces through the Shared Context Engine and the audit log.
-- Degradation is preferred over hard failure whenever safety permits.
+## Release QA Checklist
 
-Every failure emits a structured event on the Shared Context Engine and is recorded in the [Audit Log](./AUDIT_LOG.md).
+Every release candidate MUST pass the following before shipping:
 
-## Security Considerations
+- [ ] All CI tests pass (functional + integration + security).
+- [ ] Eval harness suite passes for all active model providers.
+- [ ] Performance benchmarks meet all targets (see [Performance](./PERFORMANCE.md)).
+- [ ] Reliability fault-injection suite passes (no data loss, auto-recovery).
+- [ ] No critical or high-severity open bugs against the release.
+- [ ] Security scan reports zero new vulnerabilities.
+- [ ] Changelog reviewed for accuracy.
 
-- Trust boundary: crosses only through signed envelopes (see [Security Model](./SECURITY_MODEL.md)).
-- Secrets are read from [Secrets Management](./SECRETS_MANAGEMENT.md); never inlined.
-- All external calls go through [Model Providers](./MODEL_PROVIDERS.md) or the [Plugin SDK](./PLUGIN_SDK.md) — no ad-hoc network access.
+## Regression Testing Strategy
 
-## Observability
+- Every bug fix includes a test that reproduces the bug (see [Testing Strategy](./TESTING_STRATEGY.md)).
+- The full eval harness suite is run against every release candidate and compared to the previous release.
+- A regression is defined as any metric that degrades by > 5% (latency, throughput, eval score).
+- Regressions block release and require either a fix or a documented trade-off approved by the QA lead.
 
-- Metrics, traces, and logs conform to [Observability](./OBSERVABILITY.md), [Tracing](./TRACING.md), and [Logging](./LOGGING.md).
-- Every run carries a `correlation_id` propagated from the Kernel.
+## Manual Testing Scenarios
 
-## Acceptance Criteria
+Scenarios that require human review, run before each major release:
 
-- The contracts above are testable via the [Eval Harness](./EVAL_HARNESS.md).
-- A change to this document requires a matching update to any dependent doc listed in *Related Documents*.
+1. **First-run experience**: Install, configure, run a simple task end-to-end.
+2. **Multi-agent workflow**: Run a task that requires 3+ agents with shared context.
+3. **Error recovery**: Kill a worker mid-task and verify the run completes.
+4. **Large context**: Run a task with 50 K+ tokens of context.
+5. **Plugin extension**: Load a custom plugin and verify it participates in the loop.
 
-## Open Questions
+## Bug Tracking Process
 
-- _Track open questions as ADRs under [templates/ADR](../templates/ADR.md)._
+- All bugs are filed in the issue tracker with severity (`critical`, `high`, `medium`, `low`).
+- Critical bugs block the release. High bugs require a documented workaround.
+- Every bug MUST include: steps to reproduce, expected vs actual behavior, environment, logs.
+- Bugs are triaged weekly by the QA lead. See [Error Handling](./ERROR_HANDLING.md) for error taxonomy.
+
+## Quality Metrics and Targets
+
+| Metric | Target | Measurement |
+|---|---|---|
+| Test pass rate (CI) | 100% | Per build |
+| Eval harness score | > 85% | Per model provider |
+| Performance targets met | 100% of MUST targets | Per release |
+| Regression rate | < 2% metric degradation | Per release |
+| Critical bug count | 0 at release | At ship time |
+| Security vulns (critical/high) | 0 | Per scan |
 
 ## Related Documents
 
-- [System Overview](./SYSTEM_OVERVIEW.md)
-- [Main Ai Kernel](./MAIN_AI_KERNEL.md)
-- [Prd](./PRD.md)
-- [Trd](./TRD.md)
-- [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)
+- [Testing Strategy](./TESTING_STRATEGY.md) — unit, integration, and regression test practices
+- [Eval Harness](./EVAL_HARNESS.md) — structured evaluation framework for prompts and models
+- [Benchmarks](./BENCHMARKS.md) — performance and quality benchmarking
+- [Error Handling](./ERROR_HANDLING.md) — error taxonomy, codes, and recovery
+- [Release Process](./RELEASE_PROCESS.md) — staging, canary, and production release steps
+- [Security Model](./SECURITY_MODEL.md) — security testing scope

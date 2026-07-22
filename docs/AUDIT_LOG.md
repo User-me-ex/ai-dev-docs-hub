@@ -1,88 +1,249 @@
 # Audit Log
 
-> Specification for the Audit Log subsystem of the AI Development Operating System. This document is normative — implementations MUST satisfy every MUST clause below.
+> Append-only, tamper-evident, hash-chained event store for every security-relevant and operationally-significant action in AI Dev OS. This document is normative — implementations MUST satisfy every MUST clause below.
 
 ## Overview
 
-Audit Log is a first-class subsystem of the AI Development Operating System (AI Dev OS). It participates in the Kernel's intake → plan → route → execute → critique → merge → guard → deliver loop and communicates exclusively through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md). This document defines its purpose, contracts, invariants, and failure modes so that AI agents can reason about it without inspecting any implementation.
+The Audit Log is the system of record for "who did what, when, and with which authority." Every subsystem publishes audit events for actions that cross trust boundaries or affect durable state: Kernel runs, model provider calls, role assignments, memory writes, Guardian verdicts, and security decisions. The log is append-only — events are never modified or deleted — and hash-chained so that tampering with past entries is detectable.
+
+The Audit Log is separate from the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md) event log: SCE events are operational (high-volume, streaming, topic-organised), while audit events are compliance-oriented (lower-volume, forever-retained, hash-chained). The SCE itself writes audit events for its own administrative actions (topic creation, ACL changes).
 
 ## Goals
 
-- Provide an authoritative, unambiguous specification for this subsystem.
-- Define contracts, invariants, and acceptance criteria consumed by AI agents.
-- Stay small enough to review, large enough to remove ambiguity.
+- Append-only: no modification or deletion of committed events.
+- Tamper-evident: hash chain links every event to its predecessor.
+- Queryable: filtered by actor, action, resource, time range, and correlation_id.
+- Exportable: full or filtered export in JSON and CSV for SIEM ingestion.
+- Performance: sustained write throughput of 1,000 events/s on local SQLite; p99 read < 50 ms.
 
 ## Non-Goals
 
+- Real-time event streaming — use the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md) for that.
+- Large payload storage (> 64 KB per event detail) — store a reference pointer instead.
 - Implementation code — this repository is documentation-only (see [AI Coding Rules](./AI_CODING_RULES.md)).
-- Vendor-specific tuning beyond what [Model Providers](./MODEL_PROVIDERS.md) allows.
-- Duplicating contracts that belong to another subsystem; link instead.
-
-## Requirements
-
-- **MUST** be consumable by both humans and AI agents.
-- **MUST** publish every state change to the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md).
-- **MUST** pass every rule enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
-- **MUST** be observable through the metrics defined in [Observability](./OBSERVABILITY.md).
-- **SHOULD** degrade gracefully rather than fail hard.
-- **MAY** be extended via the [Plugin SDK](./PLUGIN_SDK.md) when the extension point is declared here.
 
 ## Architecture
 
 ```mermaid
-flowchart LR
-  IN([Input]) --> SUB[Audit Log]
-  SUB --> CTX[(Shared Context Engine)]
-  SUB --> GUARD{Architecture Guardian}
-  GUARD -->|ok| OUT([Output])
-  GUARD -->|veto| SUB
+flowchart TB
+    subgraph Publishers
+        K[Kernel]
+        AG[AI Group System]
+        DW[Dynamic Workers]
+        NR[Nine Router]
+        AG2[Architecture Guardian]
+        MM[Merge Manager]
+        PM[Persistent Memory]
+        SEC[Security Monitor]
+    end
+
+    Publishers -->|audit.write| AL[Audit Log Service]
+
+    subgraph Storage
+        DB[(SQLite\nappend-only)]
+        CHAIN[Hash chain\nSHA-256]
+    end
+
+    AL --> DB
+    AL --> CHAIN
+    
+    subgraph Consumers
+        QUERY[audit.query API]
+        EXPORT[audit.export]
+        SIEM[SIEM integration]
+        CLI[CLI: aidevos audit]
+    end
+
+    DB --> QUERY
+    DB --> EXPORT
+    DB --> SIEM
+    DB --> CLI
 ```
 
-The subsystem is stateless at the process boundary; all durable state lives in the [Persistent Memory](./PERSISTENT_MEMORY.md) tier and is projected on demand.
+## AuditEvent Schema
+
+```
+AuditEvent {
+  id:            ulid                  # monotonic global order
+  ts:            rfc3339               # broker-assigned timestamp
+  
+  actor: {
+    id:          string                # kernel | system | agent_id | user_id
+    kind:        "kernel"|"agent"|"user"|"system"|"plugin"|"mcp"
+    role:        string?               # NineRole for agents
+  }
+
+  action:        string                # verb-noun; e.g. "run.submit", "memory.write"
+  resource: {
+    type:        string                # "run"|"memory"|"model"|"provider"|"group"|etc.
+    id:          string?               # resource identifier
+    path:        string?               # file path if applicable
+  }
+
+  detail:        object?               # action-specific payload (max 64 KB)
+  result:        "success"|"denied"|"failure"|"veto"|"timeout"
+  reason:        string?               # human-readable explanation on non-success
+
+  correlation_id: uuid                 # from originating Kernel run
+  causation_id:  ulid?                 # id of the AuditEvent that caused this one
+
+  # Hash chain
+  prev_hash:     string                # SHA-256 of previous AuditEvent (canonical bytes)
+  hash:          string                # SHA-256 of this event's canonical bytes (including prev_hash)
+  signature:     string                # Ed25519 signed by Kernel
+}
+```
+
+### Canonical bytes for hashing
+
+```
+canonical = JSON.stringify({
+  id, ts, actor, action, resource, detail, result, correlation_id, prev_hash
+})
+hash = SHA256(canonical)
+```
+
+## Hash Chain Verification
+
+```
+verify_chain(from_id, to_id):
+  events = read_range(from_id, to_id)
+  for i in 1..len(events)-1:
+    expected_prev = SHA256(canonical(events[i-1]))
+    assert events[i].prev_hash == expected_prev
+  assert verify_signature(events[-1])  # Kernel signature
+```
+
+The chain root (first event) has `prev_hash = SHA256("aidevos-audit-log-v1")`. Any gap or mismatch in `prev_hash` indicates tampering.
+
+## Action Taxonomy
+
+| Action category | Examples |
+|----------------|----------|
+| `run.*` | `run.submit`, `run.start`, `run.complete`, `run.cancel`, `run.fail`, `run.replay` |
+| `worker.*` | `worker.spawn`, `worker.complete`, `worker.fail`, `worker.cancel`, `worker.checkpoint` |
+| `model.*` | `model.discover`, `model.assigned`, `model.unassigned`, `model.fallback` |
+| `provider.*` | `provider.connect`, `provider.auth_error`, `provider.rate_limited`, `provider.degraded` |
+| `memory.*` | `memory.write`, `memory.delete`, `memory.expire`, `memory.export` |
+| `kb.*` | `kb.write`, `kb.upsert`, `kb.delete` |
+| `group.*` | `group.spawn`, `group.shutdown`, `group.circuit_open`, `group.worker_add` |
+| `merge.*` | `merge.begin`, `merge.commit`, `merge.conflict`, `merge.resolve` |
+| `guardian.*` | `guardian.evaluate`, `guardian.veto`, `guardian.auto_fix` |
+| `security.*` | `security.auth_success`, `security.auth_denied`, `security.signature_failure`, `security.key_rotation` |
+| `config.*` | `config.set`, `config.delete`, `config.import` |
+| `admin.*` | `admin.user_add`, `admin.user_remove`, `admin.workspace_create` |
 
 ## Interfaces
 
-- See related subsystems for the concrete API surface this document constrains.
+```
+audit.write(event: AuditEventInput) → AuditEvent    # internal; called by subsystems
+audit.get(id: ulid) → AuditEvent
+audit.query(filter: AuditFilter) → AuditEvent[]
+audit.stream(filter: AuditFilter) → AsyncIterator<AuditEvent>
+audit.export(filter: AuditFilter, format: "json"|"csv") → ExportRef
+audit.verify(from_id?: ulid, to_id?: ulid) → VerifyReport
+audit.stats() → AuditStats
+```
 
-All interfaces follow the envelope defined in [Agent Communication](./AGENT_COMMUNICATION.md) and the error contract defined in [API Spec](./API_SPEC.md).
+### AuditFilter
 
-## Data Model
+```
+AuditFilter {
+  actors?:        string[]
+  actions?:       string[]        # prefix match; "run." matches all run actions
+  resource_types?: string[]
+  resource_ids?:  string[]
+  results?:       AuditResult[]
+  correlation_id?: uuid
+  after?:         rfc3339
+  before?:        rfc3339
+  limit?:         number          # default 100, max 10000
+  offset?:        ulid            # cursor-based pagination
+}
+```
 
-- Entities and fields are declared in the referenced subsystems and in [DATABASE](./DATABASE.md).
+### AuditStats
 
-Retention and encryption rules are inherited from [Data Retention](./DATA_RETENTION.md) and [Encryption](./ENCRYPTION.md).
+```
+AuditStats {
+  total_events:        number
+  oldest_event:        rfc3339
+  newest_event:        rfc3339
+  events_by_action:    { [action]: number }
+  events_by_result:    { [result]: number }
+  chain_verified:      boolean
+  chain_from:          ulid
+  chain_to:            ulid
+}
+```
+
+## Retention
+
+- Audit events are retained **forever**. There is no expiry or compaction.
+- The only permitted deletion is a court-ordered legal hold reversal, which must preserve the hash chain by inserting a `redaction` event (not modifying the original).
+- Storage estimate: ~500 bytes per event + detail payload. At 10,000 events/day → ~5 MB/day → ~1.8 GB/year.
+- For high-volume deployments, audit sharding by workspace is supported.
+
+## Requirements
+
+- **MUST** be append-only: events MUST NOT be modified or deleted after commit.
+- **MUST** implement a SHA-256 hash chain linking every event to its predecessor.
+- **MUST** sign every event with the Kernel's Ed25519 key for authenticity.
+- **MUST** support query by actor, action, resource type, result, correlation_id, and time range.
+- **MUST** export events in JSON and CSV formats.
+- **MUST** verify the hash chain on demand and report any gaps or mismatches.
+- **MUST** support at least 1,000 events/s sustained write throughput on SQLite backend.
+- **SHOULD** emit `audit.chain_gap` alert when hash chain verification fails.
+- **SHOULD** support SIEM integration via syslog or Webhook (see [Webhooks](./WEBHOOKS.md)).
+- **MAY** shard by workspace for high-volume deployments.
 
 ## Failure Modes
 
-- Every failure surfaces through the Shared Context Engine and the audit log.
-- Degradation is preferred over hard failure whenever safety permits.
-
-Every failure emits a structured event on the Shared Context Engine and is recorded in the [Audit Log](./AUDIT_LOG.md).
+| Mode | Detection | Response |
+|------|-----------|----------|
+| Write failure (disk full) | SQLite error | Buffer to local WAL; alert operator; retry on recovery |
+| Hash chain gap | `verify_chain` returns mismatch | Emit `audit.chain_gap` critical alert; freeze non-critical operations; page on-call |
+| Corruption (single event) | Checksum mismatch on read | Skip corrupted event; return surrounding events with gap marker; alert |
+| Query timeout | Complex filter on large dataset | Return partial results with `truncated: true`; suggest narrower filter |
+| Export fails | File write error | Retry with exponential backoff; alert after 3 failures |
 
 ## Security Considerations
 
-- Trust boundary: crosses only through signed envelopes (see [Security Model](./SECURITY_MODEL.md)).
-- Secrets are read from [Secrets Management](./SECRETS_MANAGEMENT.md); never inlined.
-- All external calls go through [Model Providers](./MODEL_PROVIDERS.md) or the [Plugin SDK](./PLUGIN_SDK.md) — no ad-hoc network access.
+- The Audit Log is the authoritative source for forensic investigation. Its integrity is protected by the hash chain and Kernel signature — even a compromised Kernel cannot silently alter past events without breaking the chain.
+- Read access is governed by [AuthZ/RBAC](./AUTHZ_RBAC.md): operators see all events; agents see only events within their `correlation_id` scope.
+- The `detail` field MUST NOT contain secrets, credentials, or PII. Subsystems MUST sanitize before calling `audit.write`.
+- See [Security Model](./SECURITY_MODEL.md) for key management and signing.
 
 ## Observability
 
-- Metrics, traces, and logs conform to [Observability](./OBSERVABILITY.md), [Tracing](./TRACING.md), and [Logging](./LOGGING.md).
-- Every run carries a `correlation_id` propagated from the Kernel.
+| Metric | Labels | Description |
+|--------|--------|-------------|
+| `audit_write_total` | `result` | Events written |
+| `audit_write_seconds` | — | Write latency histogram |
+| `audit_query_seconds` | — | Query latency histogram |
+| `audit_export_bytes` | `format` | Export size |
+| `audit_total_events` | — | Current event count gauge |
+| `audit_chain_gap_total` | — | Chain verification failures |
 
 ## Acceptance Criteria
 
-- The contracts above are testable via the [Eval Harness](./EVAL_HARNESS.md).
-- A change to this document requires a matching update to any dependent doc listed in *Related Documents*.
+- Writing 10,000 events sequentially and calling `verify_chain()` returns `{ verified: true }`.
+- Tampering with one byte of an event's `detail` field causes the subsequent `verify_chain()` call to report a gap at the modified event's position.
+- `audit.query({ actions: ["run.submit"], limit: 5 })` returns 5 events with `action == "run.submit"` ordered by `id` descending.
+- Exporting 100,000 events as CSV produces a valid CSV file with all events in order.
+- Simultaneously writing from 10 concurrent publishers sustains 1,000 events/s on a commodity SSD.
 
 ## Open Questions
 
-- _Track open questions as ADRs under [templates/ADR](../templates/ADR.md)._
+- Whether to support external immutable storage backends (AWS Glacier, Azure Blob immutable) for long-term archive — tracked in [templates/ADR](../templates/ADR.md).
+- Hash chain verification frequency: on every read vs. periodic background job vs. on-demand only.
 
 ## Related Documents
 
+- [Security Model](./SECURITY_MODEL.md) — trust architecture and signing
+- [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md) — operational event log
+- [Observability](./OBSERVABILITY.md) — metrics and alerting
+- [Data Retention](./DATA_RETENTION.md) — retention policies for non-audit data
 - [System Overview](./SYSTEM_OVERVIEW.md)
-- [Main Ai Kernel](./MAIN_AI_KERNEL.md)
-- [Prd](./PRD.md)
-- [Trd](./TRD.md)
+- [Main AI Kernel](./MAIN_AI_KERNEL.md)
 - [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)

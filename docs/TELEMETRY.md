@@ -1,88 +1,84 @@
 # Telemetry
 
-> Specification for the Telemetry subsystem of the AI Development Operating System. This document is normative — implementations MUST satisfy every MUST clause below.
-
 ## Overview
 
-Telemetry is a first-class subsystem of the AI Development Operating System (AI Dev OS). It participates in the Kernel's intake → plan → route → execute → critique → merge → guard → deliver loop and communicates exclusively through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md). This document defines its purpose, contracts, invariants, and failure modes so that AI agents can reason about it without inspecting any implementation.
+Telemetry in AI Dev OS is **opt-in only** and **disabled by default**. No data is collected or transmitted unless the user explicitly enables telemetry.
 
-## Goals
+Telemetry helps the core team understand usage patterns, prioritize features, and fix bugs. It is designed with privacy as a first principle — collected data is minimal, anonymized, and never includes user content.
 
-- Provide an authoritative, unambiguous specification for this subsystem.
-- Define contracts, invariants, and acceptance criteria consumed by AI agents.
-- Stay small enough to review, large enough to remove ambiguity.
+---
 
-## Non-Goals
+## What Is Collected
 
-- Implementation code — this repository is documentation-only (see [AI Coding Rules](./AI_CODING_RULES.md)).
-- Vendor-specific tuning beyond what [Model Providers](./MODEL_PROVIDERS.md) allows.
-- Duplicating contracts that belong to another subsystem; link instead.
+When enabled, the following anonymized data points are collected:
 
-## Requirements
+| Data Point | Description |
+|---|---|
+| OS version | e.g. `Windows 10.0.19045`, `macOS 14.5`, `Linux 6.8` |
+| AI Dev OS version | e.g. `0.2.0` |
+| Command usage counts | e.g. `{ run: 42, config: 15, eval: 7 }` |
+| Error types | Aggregated error categories, **not** stack traces or messages |
+| Model provider usage | e.g. `{ anthropic: 120, openai: 45 }` — no model names or API keys |
+| Session duration | Uptime in seconds (rounded to nearest minute) |
 
-- **MUST** be consumable by both humans and AI agents.
-- **MUST** publish every state change to the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md).
-- **MUST** pass every rule enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
-- **MUST** be observable through the metrics defined in [Observability](./OBSERVABILITY.md).
-- **SHOULD** degrade gracefully rather than fail hard.
-- **MAY** be extended via the [Plugin SDK](./PLUGIN_SDK.md) when the extension point is declared here.
+---
 
-## Architecture
+## What Is NOT Collected
 
-```mermaid
-flowchart LR
-  IN([Input]) --> SUB[Telemetry]
-  SUB --> CTX[(Shared Context Engine)]
-  SUB --> GUARD{Architecture Guardian}
-  GUARD -->|ok| OUT([Output])
-  GUARD -->|veto| SUB
+- Code content, file contents, or project structure
+- Prompts sent to or responses from AI models
+- Memory contents or knowledge graph data
+- Personal information (name, email, IP address — IPs are discarded at ingestion)
+- System environment variables
+- Network configuration or hostnames
+
+---
+
+## How to Enable / Disable
+
+### Configuration File
+
+```toml
+# ~/.config/aidevos/config.toml
+
+[telemetry]
+enabled = false  # set to true to opt in
 ```
 
-The subsystem is stateless at the process boundary; all durable state lives in the [Persistent Memory](./PERSISTENT_MEMORY.md) tier and is projected on demand.
+### Environment Variable
 
-## Interfaces
+```bash
+# Overrides config.toml
+export AIDEVOS_TELEMETRY_ENABLED=true
+```
 
-- See related subsystems for the concrete API surface this document constrains.
+Setting `AIDEVOS_TELEMETRY_ENABLED=false` explicitly disables telemetry even if the config file says `true`.
 
-All interfaces follow the envelope defined in [Agent Communication](./AGENT_COMMUNICATION.md) and the error contract defined in [API Spec](./API_SPEC.md).
+---
 
-## Data Model
+## Data Transmission
 
-- Entities and fields are declared in the referenced subsystems and in [DATABASE](./DATABASE.md).
+Telemetry data is buffered locally and uploaded in periodic batch requests to `telemetry.aidevos.dev/v1/ping`. Batch size: up to 100 events. Frequency: every 60 minutes while the daemon is running.
 
-Retention and encryption rules are inherited from [Data Retention](./DATA_RETENTION.md) and [Encryption](./ENCRYPTION.md).
+Transmission uses HTTPS with TLS 1.3. No data is sent to third-party services — the telemetry endpoint is self-hosted by the AI Dev OS project.
 
-## Failure Modes
+If the endpoint is unreachable (network offline, DNS failure), events are queued and retried. The queue caps at 1000 events; older events are dropped (FIFO).
 
-- Every failure surfaces through the Shared Context Engine and the audit log.
-- Degradation is preferred over hard failure whenever safety permits.
+---
 
-Every failure emits a structured event on the Shared Context Engine and is recorded in the [Audit Log](./AUDIT_LOG.md).
+## Privacy Guarantees
 
-## Security Considerations
+1. Telemetry is opt-in. No data leaves the machine without user consent.
+2. All collected data is anonymized at the source — no PII is ever transmitted.
+3. Telemetry payloads are encrypted in transit (TLS 1.3).
+4. Data on the telemetry server is retained for 90 days, then aggregated and anonymized permanently.
+5. Users can delete their telemetry data by contacting the project team with their installation ID.
+6. The telemetry module is open source — inspect it at `src/telemetry/`.
 
-- Trust boundary: crosses only through signed envelopes (see [Security Model](./SECURITY_MODEL.md)).
-- Secrets are read from [Secrets Management](./SECRETS_MANAGEMENT.md); never inlined.
-- All external calls go through [Model Providers](./MODEL_PROVIDERS.md) or the [Plugin SDK](./PLUGIN_SDK.md) — no ad-hoc network access.
-
-## Observability
-
-- Metrics, traces, and logs conform to [Observability](./OBSERVABILITY.md), [Tracing](./TRACING.md), and [Logging](./LOGGING.md).
-- Every run carries a `correlation_id` propagated from the Kernel.
-
-## Acceptance Criteria
-
-- The contracts above are testable via the [Eval Harness](./EVAL_HARNESS.md).
-- A change to this document requires a matching update to any dependent doc listed in *Related Documents*.
-
-## Open Questions
-
-- _Track open questions as ADRs under [templates/ADR](../templates/ADR.md)._
+---
 
 ## Related Documents
 
-- [System Overview](./SYSTEM_OVERVIEW.md)
-- [Main Ai Kernel](./MAIN_AI_KERNEL.md)
-- [Prd](./PRD.md)
-- [Trd](./TRD.md)
-- [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)
+- [Privacy Policy](./PRIVACY.md)
+- [Configuration Reference](./CONFIGURATION.md)
+- [Environment Variables](./ENV_VARS.md)

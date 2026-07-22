@@ -1,88 +1,122 @@
 # Class Registry
 
-> Specification for the Class Registry subsystem of the AI Development Operating System. This document is normative — implementations MUST satisfy every MUST clause below.
+**Component ID:** core.class-registry  
+**Status:** Active  
+**Version:** 1.0.0  
+**Last Updated:** 2026-07-22
+
+---
 
 ## Overview
 
-Class Registry is a first-class subsystem of the AI Development Operating System (AI Dev OS). It participates in the Kernel's intake → plan → route → execute → critique → merge → guard → deliver loop and communicates exclusively through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md). This document defines its purpose, contracts, invariants, and failure modes so that AI agents can reason about it without inspecting any implementation.
+The Class Registry maintains a structured catalog of all class and type definitions in the codebase. While the Symbol Registry indexes every symbol generically, the Class Registry adds class-specific semantics: inheritance hierarchies, interface implementations, generic type parameters, and relationship metadata.
 
-## Goals
+This registry serves two primary consumers: the Impact Analysis engine (which uses class relationships to compute change propagation) and the MERMAID_DIAGRAMS.md pipeline (which consumes relationship data to auto-generate UML class diagrams).
 
-- Provide an authoritative, unambiguous specification for this subsystem.
-- Define contracts, invariants, and acceptance criteria consumed by AI agents.
-- Stay small enough to review, large enough to remove ambiguity.
+---
 
-## Non-Goals
+## ClassDefinition Schema
 
-- Implementation code — this repository is documentation-only (see [AI Coding Rules](./AI_CODING_RULES.md)).
-- Vendor-specific tuning beyond what [Model Providers](./MODEL_PROVIDERS.md) allows.
-- Duplicating contracts that belong to another subsystem; link instead.
-
-## Requirements
-
-- **MUST** be consumable by both humans and AI agents.
-- **MUST** publish every state change to the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md).
-- **MUST** pass every rule enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
-- **MUST** be observable through the metrics defined in [Observability](./OBSERVABILITY.md).
-- **SHOULD** degrade gracefully rather than fail hard.
-- **MAY** be extended via the [Plugin SDK](./PLUGIN_SDK.md) when the extension point is declared here.
-
-## Architecture
-
-```mermaid
-flowchart LR
-  IN([Input]) --> SUB[Class Registry]
-  SUB --> CTX[(Shared Context Engine)]
-  SUB --> GUARD{Architecture Guardian}
-  GUARD -->|ok| OUT([Output])
-  GUARD -->|veto| SUB
+```typescript
+interface ClassDefinition {
+  name: string;
+  kind: "class" | "interface" | "abstract_class" | "enum" | "type_alias";
+  file: string;
+  line: number;
+  type_parameters?: string[];
+  extends?: string[];
+  implements?: string[];
+  uses?: Array<{ type: string; relation: "property" | "parameter" | "return_type" | "composition" }>;
+  members: Array<{
+    name: string;
+    kind: "method" | "property" | "constructor";
+    visibility: "public" | "protected" | "private";
+    type: string;
+    static: boolean;
+    line: number;
+  }>;
+  exports: boolean;
+  deprecated: boolean;
+}
 ```
 
-The subsystem is stateless at the process boundary; all durable state lives in the [Persistent Memory](./PERSISTENT_MEMORY.md) tier and is projected on demand.
+| Field             | Type                          | Description                              |
+|-------------------|-------------------------------|------------------------------------------|
+| `name`            | `string`                      | Fully qualified class/type name          |
+| `kind`            | `ClassKind`                   | Class, interface, abstract, enum, alias  |
+| `file`            | `string`                      | Declaring file path                      |
+| `line`            | `number`                      | Declaration line number                  |
+| `type_parameters` | `string[]`?                   | Generic type params (e.g. `T`, `K`, `V`) |
+| `extends`         | `string[]`?                   | Parent classes                           |
+| `implements`      | `string[]`?                   | Implemented interfaces                   |
+| `uses`            | `Array<TypeUse>`?             | Usage relationships to other types       |
+| `members`         | `Array<MemberDefinition>`     | Methods, properties, constructors        |
+| `exports`         | `boolean`                     | Exported from module                     |
+| `deprecated`      | `boolean`                     | Marked with deprecation annotation       |
+
+---
+
+## Relationship Types
+
+| Relation       | Direction       | Semantics                                  |
+|----------------|-----------------|--------------------------------------------|
+| `extends`      | child → parent  | Inheritance (single or multi)              |
+| `implements`   | impl → interface| Contract fulfillment                        |
+| `property`     | owner → type    | Member variable of a given type            |
+| `parameter`    | method → type   | Method/constructor parameter type          |
+| `return_type`  | method → type   | Return type annotation                     |
+| `composition`  | owner → type    | Owned instance (strong lifetime coupling)  |
+
+Relationships form a directed graph. Cycles are permitted for `uses`-category edges only; inheritance cycles are rejected at registration time.
+
+---
+
+## Integration with MERMAID_DIAGRAMS.md
+
+The Class Registry is the data provider for automatic class diagram generation. The engine calls `class_registry.get_diagram_data(package?, depth?)` which returns structured classes and relationships, then renders a Mermaid `classDiagram` block. The diagram regenerates on class registration events (file save, module import, type change).
+
+```typescript
+interface DiagramData {
+  classes: Array<{
+    name: string; kind: string;
+    members: Array<{ name: string; kind: string; visibility: string; type: string }>;
+  }>;
+  relationships: Array<{
+    from: string; to: string;
+    type: "extends" | "implements" | "composition" | "dependency";
+    label?: string;
+  }>;
+}
+```
+
+---
 
 ## Interfaces
 
-- See related subsystems for the concrete API surface this document constrains.
+### `registry.register(def: ClassDefinition): void`
+Insert or update a class record. Validates that `extends` targets exist as registered classes (warning on missing, configurable strict mode).
 
-All interfaces follow the envelope defined in [Agent Communication](./AGENT_COMMUNICATION.md) and the error contract defined in [API Spec](./API_SPEC.md).
+### `registry.lookup(name: string): ClassDefinition | null`
+Resolve a class by fully qualified name.
 
-## Data Model
+### `registry.get_children(name: string): Array<ClassDefinition>`
+Return all classes that directly extend or implement the given class.
 
-- Entities and fields are declared in the referenced subsystems and in [DATABASE](./DATABASE.md).
+### `registry.get_descendants(name: string, depth?: number): Array<ClassDefinition>`
+Return the transitive closure of children. Default depth is unlimited.
 
-Retention and encryption rules are inherited from [Data Retention](./DATA_RETENTION.md) and [Encryption](./ENCRYPTION.md).
+### `registry.get_diagram_data(package?: string, depth?: number): DiagramData`
+Return structured data for Mermaid class diagram generation.
 
-## Failure Modes
+### `registry.search(query: string): Array<ClassDefinition>`
+Free-text search across class names, member names, and docstrings.
 
-- Every failure surfaces through the Shared Context Engine and the audit log.
-- Degradation is preferred over hard failure whenever safety permits.
-
-Every failure emits a structured event on the Shared Context Engine and is recorded in the [Audit Log](./AUDIT_LOG.md).
-
-## Security Considerations
-
-- Trust boundary: crosses only through signed envelopes (see [Security Model](./SECURITY_MODEL.md)).
-- Secrets are read from [Secrets Management](./SECRETS_MANAGEMENT.md); never inlined.
-- All external calls go through [Model Providers](./MODEL_PROVIDERS.md) or the [Plugin SDK](./PLUGIN_SDK.md) — no ad-hoc network access.
-
-## Observability
-
-- Metrics, traces, and logs conform to [Observability](./OBSERVABILITY.md), [Tracing](./TRACING.md), and [Logging](./LOGGING.md).
-- Every run carries a `correlation_id` propagated from the Kernel.
-
-## Acceptance Criteria
-
-- The contracts above are testable via the [Eval Harness](./EVAL_HARNESS.md).
-- A change to this document requires a matching update to any dependent doc listed in *Related Documents*.
-
-## Open Questions
-
-- _Track open questions as ADRs under [templates/ADR](../templates/ADR.md)._
+---
 
 ## Related Documents
 
-- [System Overview](./SYSTEM_OVERVIEW.md)
-- [Main Ai Kernel](./MAIN_AI_KERNEL.md)
-- [Prd](./PRD.md)
-- [Trd](./TRD.md)
-- [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)
+- SYMBOL_REGISTRY.md — General-purpose symbol tracking
+- FUNCTION_REGISTRY.md — Function-specific registry layer
+- VARIABLE_REGISTRY.md — Environment variable and config tracking
+- MERMAID_DIAGRAMS.md — Auto-generated diagram pipeline
+- ARCHITECTURE_GUARDIAN.md — System-wide architectural enforcement

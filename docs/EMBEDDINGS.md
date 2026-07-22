@@ -1,88 +1,155 @@
 # Embeddings
 
-> Specification for the Embeddings subsystem of the AI Development Operating System. This document is normative — implementations MUST satisfy every MUST clause below.
+> **Domain:** Embedding Model Selection, Batching, and Pipeline
+> **Applies to:** Model Provider Proxy, Persistent Memory, Vector Store
+> **Last updated:** 2026-07-22
 
 ## Overview
 
-Embeddings is a first-class subsystem of the AI Development Operating System (AI Dev OS). It participates in the Kernel's intake → plan → route → execute → critique → merge → guard → deliver loop and communicates exclusively through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md). This document defines its purpose, contracts, invariants, and failure modes so that AI agents can reason about it without inspecting any implementation.
+AI Dev OS generates vector embeddings for all text that enters the knowledge system — documents, agent memory entries, code snippets, and queries. The embedding pipeline is asynchronous, batched, and model-agnostic. Embeddings power semantic search in the Vector Store, clustering in the Obsidian Graph Engine, and similarity scoring in the RAG pipeline.
 
-## Goals
+```
+Text ──► Queue ──► Batch ──► Model Call ──► Normalize ──► Store ──► Index ──► Event
+```
 
-- Provide an authoritative, unambiguous specification for this subsystem.
-- Define contracts, invariants, and acceptance criteria consumed by AI agents.
-- Stay small enough to review, large enough to remove ambiguity.
+## Supported Embedding Models
 
-## Non-Goals
+| Model | Provider | Dimensions | Max Tokens | Cost Tier | Notes |
+|-------|----------|------------|------------|-----------|-------|
+| `nomic-embed-text` | Nomic (local via Ollama) | 768 | 8192 | Free | Default local model, no API key needed. |
+| `text-embedding-3-small` | OpenAI | 512 / 1536* | 8191 | Low | Best quality-per-token for small contexts. |
+| `text-embedding-3-large` | OpenAI | 1024 / 3072* | 8191 | Medium | Highest OpenAI quality, 2x cost of small. |
+| `text-embedding-004` | Google Vertex AI | 768 | 2048 | Medium | Good for multilingual content. |
+| `mistral-embed` | Mistral | 1024 | 8192 | Low | Open-weight model via API, competitive quality. |
 
-- Implementation code — this repository is documentation-only (see [AI Coding Rules](./AI_CODING_RULES.md)).
-- Vendor-specific tuning beyond what [Model Providers](./MODEL_PROVIDERS.md) allows.
-- Duplicating contracts that belong to another subsystem; link instead.
+*Variable dimensions via `dimensions` parameter. Shorter dimensions trade fidelity for speed and storage.
 
-## Requirements
-
-- **MUST** be consumable by both humans and AI agents.
-- **MUST** publish every state change to the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md).
-- **MUST** pass every rule enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
-- **MUST** be observable through the metrics defined in [Observability](./OBSERVABILITY.md).
-- **SHOULD** degrade gracefully rather than fail hard.
-- **MAY** be extended via the [Plugin SDK](./PLUGIN_SDK.md) when the extension point is declared here.
-
-## Architecture
+## Embedding Pipeline
 
 ```mermaid
 flowchart LR
-  IN([Input]) --> SUB[Embeddings]
-  SUB --> CTX[(Shared Context Engine)]
-  SUB --> GUARD{Architecture Guardian}
-  GUARD -->|ok| OUT([Output])
-  GUARD -->|veto| SUB
+    INPUT[Text Input] --> QUEUE[(Ingest Queue)]
+    QUEUE --> BATCHER[Batching Engine]
+    BATCHER --> DELAY{Delay since\nlast batch?}
+    DELAY -->|≥ 100ms| MODEL[Model Provider]
+    DELAY -->|< 100ms| WAIT[Wait 100ms]
+    WAIT --> BATCHER
+    MODEL --> NORM[L2 Normalize]
+    NORM --> STORE[(Vector Store)]
+    STORE --> INDEX[Update ANN Index]
+    INDEX --> EVENT["emit('embedding.generated', {id, dims, model})"]
 ```
 
-The subsystem is stateless at the process boundary; all durable state lives in the [Persistent Memory](./PERSISTENT_MEMORY.md) tier and is projected on demand.
+**Pipeline stages:**
+
+1. **Queue:** Incoming text is enqueued with a priority tag (`interactive`, `background`, `backfill`).
+2. **Batch:** The batching engine collects items until either 64 items are queued or 100ms have elapsed since the last batch.
+3. **Model call:** The batch is sent to the configured model provider. Results are returned as a `float[][]`.
+4. **Normalize:** Each vector is L2-normalized in place (required for cosine similarity).
+5. **Store:** Vectors are written to the Vector Store (usearch index + SQLite relational store).
+6. **Event:** An `embedding.generated` event is emitted on the SCE bus for downstream consumers (Obsidian Graph Engine, RAG indexer).
+
+## Configuration
+
+```toml
+[embeddings]
+# Model selection per tier
+model_default = "nomic-embed-text"
+model_interactive = "text-embedding-3-small"
+model_background = "nomic-embed-text"
+model_backfill = "nomic-embed-text"
+
+# Batching
+max_batch_size = 64
+batch_window_ms = 100
+
+# Storage
+dimensions = 768  # Must match the selected model
+normalize = true
+
+# Cache
+cache_ttl_sec = 3600
+cache_max_entries = 5000
+```
+
+Each tier (`interactive`, `background`, `backfill`) can use a different model to balance cost vs. latency. Interactive queries use the highest-quality model; background indexing uses the cheapest.
+
+## Batching Strategy
+
+- **Maximum batch size:** 64 items. Larger batches increase throughput but raise the risk of partial failures.
+- **Async backfill:** Low-priority backfill jobs are batched separately from interactive requests to prevent latency spikes.
+- **Timeout:** A single batch must complete within 30 seconds. Partial results (some items failed) are retried individually.
+- **Concurrency:** One active batch per model provider. Additional batches queue behind it.
+
+## Embedding Dimensions
+
+| Model | Default Dims | Available Dims | Storage per Vector (float32) |
+|-------|-------------|----------------|------------------------------|
+| nomic-embed-text | 768 | 768 | 3,072 bytes |
+| text-embedding-3-small | 1536 | 256, 512, 1024, 1536 | 2,048–6,144 bytes |
+| text-embedding-3-large | 3072 | 256, 512, 1024, 2048, 3072 | 4,096–12,288 bytes |
+| text-embedding-004 | 768 | 768 | 3,072 bytes |
+| mistral-embed | 1024 | 1024 | 4,096 bytes |
+
+## Normalization
+
+All vectors are L2-normalized before storage:
+
+```
+v_norm = v / ||v||₂
+```
+
+Normalization ensures that cosine similarity is equivalent to the dot product:
+
+```
+cosine_sim(a, b) = a · b   (when both are L2-normalized)
+```
+
+This allows the usearch HNSW index to use the fast dot-product distance metric while behaving as cosine similarity.
+
+## Cache
+
+An embedding cache avoids redundant model calls:
+
+- **Key:** SHA-256 of the input text + model name + dimensions.
+- **TTL:** Configurable (default 1 hour). Bumped on every hit.
+- **Eviction:** LRU when `cache_max_entries` is exceeded.
+- **Skip:** Texts longer than 512 tokens bypass the cache (low probability of repeat).
 
 ## Interfaces
 
-- See related subsystems for the concrete API surface this document constrains.
-
-All interfaces follow the envelope defined in [Agent Communication](./AGENT_COMMUNICATION.md) and the error contract defined in [API Spec](./API_SPEC.md).
-
-## Data Model
-
-- Entities and fields are declared in the referenced subsystems and in [DATABASE](./DATABASE.md).
-
-Retention and encryption rules are inherited from [Data Retention](./DATA_RETENTION.md) and [Encryption](./ENCRYPTION.md).
+| Interface | Description |
+|-----------|-------------|
+| `embed.generate(texts, opts?)` | Generate embeddings. Returns `float[][]` in the same order as input. `opts` can override model, dimensions, priority. |
+| `embed.backlog()` | Returns the number of items waiting in the queue. |
+| `embed.backfill(limit)` | Process up to `limit` queued backfill items. Returns count processed. |
+| `embed.stats()` | Returns cache hit rate, average batch latency, queue depth. |
+| `embed.clear_cache()` | Clears the embedding cache. |
 
 ## Failure Modes
 
-- Every failure surfaces through the Shared Context Engine and the audit log.
-- Degradation is preferred over hard failure whenever safety permits.
+| Failure | Symptom | Recovery |
+|---------|---------|----------|
+| **Model unavailable** | Timeout or HTTP 503 from model provider. | Retry with exponential backoff (3 attempts). Fall back to the default model for the tier. |
+| **Dimension mismatch** | Model returns vector with wrong dimension count. | Reject the batch, log error, alert operator. The batch is re-queued with dimension override. |
+| **Rate limit** | HTTP 429 from model provider. | Back off for `Retry-After` duration (or 5 seconds default). Reduce batch size to 16. |
+| **Oversized text** | Text exceeds model's `max_tokens`. | Truncate to `max_tokens` (smart truncation at sentence boundary). |
 
-Every failure emits a structured event on the Shared Context Engine and is recorded in the [Audit Log](./AUDIT_LOG.md).
+## Observability Metrics
 
-## Security Considerations
-
-- Trust boundary: crosses only through signed envelopes (see [Security Model](./SECURITY_MODEL.md)).
-- Secrets are read from [Secrets Management](./SECRETS_MANAGEMENT.md); never inlined.
-- All external calls go through [Model Providers](./MODEL_PROVIDERS.md) or the [Plugin SDK](./PLUGIN_SDK.md) — no ad-hoc network access.
-
-## Observability
-
-- Metrics, traces, and logs conform to [Observability](./OBSERVABILITY.md), [Tracing](./TRACING.md), and [Logging](./LOGGING.md).
-- Every run carries a `correlation_id` propagated from the Kernel.
-
-## Acceptance Criteria
-
-- The contracts above are testable via the [Eval Harness](./EVAL_HARNESS.md).
-- A change to this document requires a matching update to any dependent doc listed in *Related Documents*.
-
-## Open Questions
-
-- _Track open questions as ADRs under [templates/ADR](../templates/ADR.md)._
+| Metric | Type | Labels |
+|--------|------|--------|
+| `embedding_generated_total` | Counter | model, status (success/failure) |
+| `embedding_latency_seconds` | Histogram | model, batch_size |
+| `embedding_queue_depth` | Gauge | priority |
+| `embedding_cache_hit_ratio` | Gauge | model |
+| `embedding_batch_size` | Histogram | model |
 
 ## Related Documents
 
-- [System Overview](./SYSTEM_OVERVIEW.md)
-- [Main Ai Kernel](./MAIN_AI_KERNEL.md)
-- [Prd](./PRD.md)
-- [Trd](./TRD.md)
-- [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)
+| Document | Description |
+|----------|-------------|
+| [Vector Store](VECTOR_STORE.md) | Vector index specification and management |
+| [RAG Pipeline](RAG_PIPELINE.md) | Retrieval-augmented generation combining BM25 + ANN + graph |
+| [Persistent Memory](PERSISTENT_MEMORY.md) | Long-term storage using embeddings for similarity search |
+| [Knowledge System](KNOWLEDGE_SYSTEM.md) | Main KB and Global KB architecture |

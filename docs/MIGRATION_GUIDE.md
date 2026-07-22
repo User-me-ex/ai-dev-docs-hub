@@ -1,88 +1,108 @@
 # Migration Guide
 
-> Specification for the Migration Guide subsystem of the AI Development Operating System. This document is normative — implementations MUST satisfy every MUST clause below.
+> Upgrade paths between AI Dev OS versions — steps for data, prompt, and config migrations.
 
 ## Overview
 
-Migration Guide is a first-class subsystem of the AI Development Operating System (AI Dev OS). It participates in the Kernel's intake → plan → route → execute → critique → merge → guard → deliver loop and communicates exclusively through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md). This document defines its purpose, contracts, invariants, and failure modes so that AI agents can reason about it without inspecting any implementation.
+This guide covers migrating between major and minor versions. Breaking changes are documented with migration steps, rationale, and rollback procedures.
 
-## Goals
+## Version Compatibility Policy
 
-- Provide an authoritative, unambiguous specification for this subsystem.
-- Define contracts, invariants, and acceptance criteria consumed by AI agents.
-- Stay small enough to review, large enough to remove ambiguity.
+AI Dev OS maintains **N-2 backward compatibility**:
 
-## Non-Goals
+- **v1.x** releases are backward-compatible with v1.0 data and config formats.
+- **v2.0** supports migration from v1.x (N-1) and v1.0 (N-2).
+- Patch releases never introduce breaking changes.
+- Minor releases maintain backward compatibility within the same major version.
 
-- Implementation code — this repository is documentation-only (see [AI Coding Rules](./AI_CODING_RULES.md)).
-- Vendor-specific tuning beyond what [Model Providers](./MODEL_PROVIDERS.md) allows.
-- Duplicating contracts that belong to another subsystem; link instead.
+Always upgrade through intermediate versions if skipping more than two major versions.
 
-## Requirements
+## Checking Current Version
 
-- **MUST** be consumable by both humans and AI agents.
-- **MUST** publish every state change to the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md).
-- **MUST** pass every rule enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
-- **MUST** be observable through the metrics defined in [Observability](./OBSERVABILITY.md).
-- **SHOULD** degrade gracefully rather than fail hard.
-- **MAY** be extended via the [Plugin SDK](./PLUGIN_SDK.md) when the extension point is declared here.
+```bash
+aidevos --version
+# v1.0.0 (commit abc1234, built 2025-11-15)
 
-## Architecture
-
-```mermaid
-flowchart LR
-  IN([Input]) --> SUB[Migration Guide]
-  SUB --> CTX[(Shared Context Engine)]
-  SUB --> GUARD{Architecture Guardian}
-  GUARD -->|ok| OUT([Output])
-  GUARD -->|veto| SUB
+aidevos doctor --verbose | grep "Schema version"
+# Schema version: 3
 ```
 
-The subsystem is stateless at the process boundary; all durable state lives in the [Persistent Memory](./PERSISTENT_MEMORY.md) tier and is projected on demand.
+## Migration Steps
 
-## Interfaces
+### From Pre-v1 Snapshots to v1.0
 
-- See related subsystems for the concrete API surface this document constrains.
+v1.0 introduces SQLite-backed data, structured prompt versioning, and TOML config format.
 
-All interfaces follow the envelope defined in [Agent Communication](./AGENT_COMMUNICATION.md) and the error contract defined in [API Spec](./API_SPEC.md).
+**Before migrating:**
 
-## Data Model
+1. Back up `~/.aidevos/`: `cp -r ~/.aidevos ~/.aidevos.backup.$(date +%Y%m%d)`
+2. Note your current version: `aidevos --version`
+3. Review the changelog.
 
-- Entities and fields are declared in the referenced subsystems and in [DATABASE](./DATABASE.md).
+**Migration command:**
 
-Retention and encryption rules are inherited from [Data Retention](./DATA_RETENTION.md) and [Encryption](./ENCRYPTION.md).
+```bash
+aidevos migrate --from=snapshot --to=v1
+aidevos doctor
+```
 
-## Failure Modes
+### Data Migration (SQLite Schema)
 
-- Every failure surfaces through the Shared Context Engine and the audit log.
-- Degradation is preferred over hard failure whenever safety permits.
+The database at `~/.aidevos/data/aidevos.db` uses versioned schemas. Migrations run automatically on `aidevos init` or `aidevos server start`.
 
-Every failure emits a structured event on the Shared Context Engine and is recorded in the [Audit Log](./AUDIT_LOG.md).
+| Schema Version | Changes | Auto-migrate |
+|----------------|---------|--------------|
+| 1 (pre-v1) | Flat file storage | Manual (`aidevos migrate`) |
+| 2 (v1.0.0) | Initial SQLite schema | — |
+| 3 (v1.1.0) | Added `vector_store` table | Automatic |
 
-## Security Considerations
+Check schema version: `sqlite3 ~/.aidevos/data/aidevos.db "PRAGMA user_version;"`
 
-- Trust boundary: crosses only through signed envelopes (see [Security Model](./SECURITY_MODEL.md)).
-- Secrets are read from [Secrets Management](./SECRETS_MANAGEMENT.md); never inlined.
-- All external calls go through [Model Providers](./MODEL_PROVIDERS.md) or the [Plugin SDK](./PLUGIN_SDK.md) — no ad-hoc network access.
+### Prompt Migration
 
-## Observability
+```bash
+aidevos migrate --check-prompts   # Check versions
+aidevos migrate --prompts         # Upgrade to latest format
+aidevos migrate --prompts --reset # Re-install defaults (overwrites customizations)
+```
 
-- Metrics, traces, and logs conform to [Observability](./OBSERVABILITY.md), [Tracing](./TRACING.md), and [Logging](./LOGGING.md).
-- Every run carries a `correlation_id` propagated from the Kernel.
+Custom prompts are preserved during upgrade unless `--reset` is passed.
 
-## Acceptance Criteria
+### Config Migration
 
-- The contracts above are testable via the [Eval Harness](./EVAL_HARNESS.md).
-- A change to this document requires a matching update to any dependent doc listed in *Related Documents*.
+```bash
+aidevos migrate --config --dry-run    # Preview changes
+aidevos migrate --config              # Apply migration
+```
 
-## Open Questions
+Key field changes in v1.0 from pre-v1:
 
-- _Track open questions as ADRs under [templates/ADR](../templates/ADR.md)._
+| Pre-v1 field | v1.0 field | Notes |
+|--------------|------------|-------|
+| `ollama.endpoint` | `providers.ollama.endpoint` | Moved under provider namespace |
+| `default_model` | `router.default_model` | Moved to router section |
+| `log_level` | `logging.level` | Moved to logging section |
+| `jwt_secret` | `auth.jwt_secret` | Moved to auth section |
+
+## Rollback Procedure
+
+1. **Stop the server**: `aidevos server stop`
+2. **Restore the backup**:
+   ```bash
+   rm -rf ~/.aidevos
+   cp -r ~/.aidevos.backup.20251115 ~/.aidevos
+   ```
+3. **Install the previous binary** (see [Installation](./INSTALLATION.md)).
+4. **Verify rollback**: `aidevos doctor`
+5. **Downgrade schema** (if needed): `aidevos migrate --rollback --to=<previous_version>`
+
+Rollbacks are supported within N-2 compatibility range. Restore from backup for further rollbacks.
 
 ## Related Documents
 
-- [System Overview](./SYSTEM_OVERVIEW.md)
-- [Main Ai Kernel](./MAIN_AI_KERNEL.md)
-- [Prd](./PRD.md)
-- [Trd](./TRD.md)
-- [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)
+- [Versioning](./VERSIONING.md) — versioning scheme and semantics
+- [Release Process](./RELEASE_PROCESS.md) — how releases are cut and published
+- [Upgrade Notes](./UPGRADE_NOTES.md) — per-version upgrade notes
+- [Changelog](./CHANGELOG.md) — full release history
+- [Database](./DATABASE.md) — SQLite schema reference
+- [Configuration](./CONFIGURATION.md) — config file format reference

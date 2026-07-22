@@ -1,88 +1,110 @@
 # Rate Limiting
 
-> Specification for the Rate Limiting subsystem of the AI Development Operating System. This document is normative — implementations MUST satisfy every MUST clause below.
+> Rate limiting strategy across AI Dev OS, covering model providers, SCE topics, API endpoints, and tool calls.
 
 ## Overview
 
-Rate Limiting is a first-class subsystem of the AI Development Operating System (AI Dev OS). It participates in the Kernel's intake → plan → route → execute → critique → merge → guard → deliver loop and communicates exclusively through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md). This document defines its purpose, contracts, invariants, and failure modes so that AI agents can reason about it without inspecting any implementation.
+Rate limiting protects AI Dev OS from resource exhaustion, ensures fair sharing across concurrent runs, and enforces contractual limits with external [Model Providers](./MODEL_PROVIDERS.md). The system applies token-bucket rate limits at multiple tiers and communicates backpressure through HTTP headers, SCE events, and queue signals.
 
-## Goals
+## Where Rate Limits Apply
 
-- Provide an authoritative, unambiguous specification for this subsystem.
-- Define contracts, invariants, and acceptance criteria consumed by AI agents.
-- Stay small enough to review, large enough to remove ambiguity.
+| Layer | What Is Limited | Limiting Factor |
+|---|---|---|
+| Model providers | API calls per model per minute | Provider contract + cost budget |
+| SCE topics | Publish events per topic per second | SCE throughput capacity |
+| API endpoints | REST/gRPC requests per route | Server capacity |
+| Tool calls | Tool invocations per run per second | Worker execution capacity |
+| Worker spawns | Concurrent workers per workspace | Resource pool size |
+| File operations | Disk writes per second | I/O bandwidth |
 
-## Non-Goals
+## Rate Limit Tiers
 
-- Implementation code — this repository is documentation-only (see [AI Coding Rules](./AI_CODING_RULES.md)).
-- Vendor-specific tuning beyond what [Model Providers](./MODEL_PROVIDERS.md) allows.
-- Duplicating contracts that belong to another subsystem; link instead.
+Each tier is independently configurable. The effective rate is the minimum of all applicable tiers.
 
-## Requirements
+| Tier | Scope | Default | Configured In |
+|---|---|---|---|
+| Per-provider | Per model provider API key | Provider-defined | `config.toml` → `[rate_limits.providers]` |
+| Per-workspace | All runs in a workspace | 100 req/s burst | `config.toml` → `[rate_limits.workspace]` |
+| Per-user | All runs by a user identity | 50 req/s sustained | `config.toml` → `[rate_limits.user]` |
+| Per-run | Single run execution | 20 req/s sustained | `config.toml` → `[rate_limits.run]` |
+| Global | System-wide aggregate | 500 req/s burst | `config.toml` → `[rate_limits.global]` |
 
-- **MUST** be consumable by both humans and AI agents.
-- **MUST** publish every state change to the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md).
-- **MUST** pass every rule enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
-- **MUST** be observable through the metrics defined in [Observability](./OBSERVABILITY.md).
-- **SHOULD** degrade gracefully rather than fail hard.
-- **MAY** be extended via the [Plugin SDK](./PLUGIN_SDK.md) when the extension point is declared here.
+## Algorithm
 
-## Architecture
+Every rate limit uses a **token bucket** with configurable capacity (burst) and refill rate (sustained). Tokens are consumed per request. If the bucket is empty, the request is either queued or rejected based on the policy.
 
-```mermaid
-flowchart LR
-  IN([Input]) --> SUB[Rate Limiting]
-  SUB --> CTX[(Shared Context Engine)]
-  SUB --> GUARD{Architecture Guardian}
-  GUARD -->|ok| OUT([Output])
-  GUARD -->|veto| SUB
+```
+capacity = burst_limit
+refill   = sustained_limit / second
+cost     = 1 per request (or weighted by request cost)
 ```
 
-The subsystem is stateless at the process boundary; all durable state lives in the [Persistent Memory](./PERSISTENT_MEMORY.md) tier and is projected on demand.
+Weighted costs allow expensive operations (embedding, file write) to consume more tokens than cheap ones (config read).
 
-## Interfaces
+## Backpressure Signals
 
-- See related subsystems for the concrete API surface this document constrains.
+| Signal | Source | Consumer Action |
+|---|---|---|
+| `429 Too Many Requests` | Model provider HTTP response | Queue or fail with retry-After |
+| `X-RateLimit-*` headers | AI Dev OS API | Client-side backoff |
+| SCE `rate_limit.backpressure` event | Kernel rate limiter | Workers pause or throttle |
+| Worker queue depth notification | Job scheduler | Kernel delays new work dispatch |
+| Provider `retry-after` header | Model provider | Respect before retry |
 
-All interfaces follow the envelope defined in [Agent Communication](./AGENT_COMMUNICATION.md) and the error contract defined in [API Spec](./API_SPEC.md).
+## Configuration
 
-## Data Model
+Rate limits are defined in `config.toml`:
 
-- Entities and fields are declared in the referenced subsystems and in [DATABASE](./DATABASE.md).
+```toml
+[rate_limits]
+mode = "queue"  # "queue" | "reject" | "degrade"
 
-Retention and encryption rules are inherited from [Data Retention](./DATA_RETENTION.md) and [Encryption](./ENCRYPTION.md).
+[rate_limits.global]
+burst = 500
+sustained = 200
+
+[rate_limits.providers.openai]
+burst = 60
+sustained = 30
+
+[rate_limits.providers.anthropic]
+burst = 40
+sustained = 20
+
+[rate_limits.topics]
+"system.events" = { burst = 200, sustained = 100 }
+"agent.messages" = { burst = 100, sustained = 50 }
+```
+
+## Rate Limit Headers
+
+All HTTP API responses include standard rate limit headers:
+
+| Header | Description |
+|---|---|
+| `X-RateLimit-Limit` | Maximum requests per window |
+| `X-RateLimit-Remaining` | Requests remaining in current window |
+| `X-RateLimit-Reset` | Unix timestamp when the window resets |
+| `Retry-After` | Seconds to wait before retry (on 429 only) |
+
+## Queueing When Rate Limited
+
+When `mode = "queue"`, rate-limited requests are placed in a per-tier FIFO queue (see [Queueing](./QUEUEING.md)). Queue capacity defaults to 1000 items per tier. When the queue is full, new requests receive a 429 response.
 
 ## Failure Modes
 
-- Every failure surfaces through the Shared Context Engine and the audit log.
-- Degradation is preferred over hard failure whenever safety permits.
-
-Every failure emits a structured event on the Shared Context Engine and is recorded in the [Audit Log](./AUDIT_LOG.md).
-
-## Security Considerations
-
-- Trust boundary: crosses only through signed envelopes (see [Security Model](./SECURITY_MODEL.md)).
-- Secrets are read from [Secrets Management](./SECRETS_MANAGEMENT.md); never inlined.
-- All external calls go through [Model Providers](./MODEL_PROVIDERS.md) or the [Plugin SDK](./PLUGIN_SDK.md) — no ad-hoc network access.
-
-## Observability
-
-- Metrics, traces, and logs conform to [Observability](./OBSERVABILITY.md), [Tracing](./TRACING.md), and [Logging](./LOGGING.md).
-- Every run carries a `correlation_id` propagated from the Kernel.
-
-## Acceptance Criteria
-
-- The contracts above are testable via the [Eval Harness](./EVAL_HARNESS.md).
-- A change to this document requires a matching update to any dependent doc listed in *Related Documents*.
-
-## Open Questions
-
-- _Track open questions as ADRs under [templates/ADR](../templates/ADR.md)._
+| Failure | Cause | Effect | Mitigation |
+|---|---|---|---|
+| Rate limit exceeded | Transient burst exceeds capacity | Request queued or 429 | Client retries with backoff |
+| Backpressure cascade | Upstream provider throttles | All dependent operations slow | Circuit breaker on provider |
+| Token bucket starvation | Sustained max throughput | Latency increases linearly | Scale out workers |
+| Misconfigured limit | Limit set too low | False positives | Validation on config load |
+| Queue overflow | Sustained overload | Requests dropped with 429 | Alert on queue depth |
 
 ## Related Documents
 
-- [System Overview](./SYSTEM_OVERVIEW.md)
-- [Main Ai Kernel](./MAIN_AI_KERNEL.md)
-- [Prd](./PRD.md)
-- [Trd](./TRD.md)
-- [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)
+- [Queueing](./QUEUEING.md) — queue architecture and backpressure propagation
+- [Model Providers](./MODEL_PROVIDERS.md) — provider-specific rate limit contracts
+- [Cost Management](./COST_MANAGEMENT.md) — cost-aware rate limiting
+- [Scalability](./SCALABILITY.md) — horizontal scaling to handle increased load
+- [Observability](./OBSERVABILITY.md) — rate limit metrics and dashboards

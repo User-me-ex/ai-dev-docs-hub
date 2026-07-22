@@ -1,88 +1,115 @@
 # Folder Structures
 
-> Specification for the Folder Structures subsystem of the AI Development Operating System. This document is normative — implementations MUST satisfy every MUST clause below.
+> Reference for the directory layouts used by AI Dev OS — the home config vault, workspace vaults, and the project repository itself.
 
 ## Overview
 
-Folder Structures is a first-class subsystem of the AI Development Operating System (AI Dev OS). It participates in the Kernel's intake → plan → route → execute → critique → merge → guard → deliver loop and communicates exclusively through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md). This document defines its purpose, contracts, invariants, and failure modes so that AI agents can reason about it without inspecting any implementation.
+AI Dev OS maintains three distinct directory trees: the **user config directory** (`~/.aidevos/`), **workspace vaults** (project-level knowledge stores), and the **repository itself**. Understanding these layouts helps with configuration, debugging, and contributing.
 
-## Goals
+## The `~/.aidevos/` Directory
 
-- Provide an authoritative, unambiguous specification for this subsystem.
-- Define contracts, invariants, and acceptance criteria consumed by AI agents.
-- Stay small enough to review, large enough to remove ambiguity.
+Created by `aidevos init`. This is the user-level home for all persistent state.
 
-## Non-Goals
-
-- Implementation code — this repository is documentation-only (see [AI Coding Rules](./AI_CODING_RULES.md)).
-- Vendor-specific tuning beyond what [Model Providers](./MODEL_PROVIDERS.md) allows.
-- Duplicating contracts that belong to another subsystem; link instead.
-
-## Requirements
-
-- **MUST** be consumable by both humans and AI agents.
-- **MUST** publish every state change to the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md).
-- **MUST** pass every rule enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
-- **MUST** be observable through the metrics defined in [Observability](./OBSERVABILITY.md).
-- **SHOULD** degrade gracefully rather than fail hard.
-- **MAY** be extended via the [Plugin SDK](./PLUGIN_SDK.md) when the extension point is declared here.
-
-## Architecture
-
-```mermaid
-flowchart LR
-  IN([Input]) --> SUB[Folder Structures]
-  SUB --> CTX[(Shared Context Engine)]
-  SUB --> GUARD{Architecture Guardian}
-  GUARD -->|ok| OUT([Output])
-  GUARD -->|veto| SUB
+```
+~/.aidevos/
+├── config.toml           # User configuration (TOML)
+├── config.lock.json      # Merged + resolved config (auto-generated)
+├── data/
+│   ├── aidevos.db        # SQLite database (runs, memory, sessions)
+│   └── vector.db         # Vector store (embeddings index)
+├── keys/
+│   └── ed25519.pem       # Local signing key (auto-generated)
+├── secrets/
+│   └── (encrypted provider keys, managed by CLI)
+├── plugins/
+│   ├── index.json        # Installed plugin manifest
+│   └── installed/        # Plugin installations (one subdirectory each)
+├── rules/
+│   └── (user-defined AI coding rules, loaded at startup)
+├── mcp.d/
+│   └── (MCP server configurations, one file per server)
+├── cache/
+│   ├── models/           # Cached model metadata
+│   └── responses/        # Cached run outputs (TTL-based)
+└── logs/
+    ├── aidevos.log       # Rotating application log
+    └── access.log        # API access log (server mode)
 ```
 
-The subsystem is stateless at the process boundary; all durable state lives in the [Persistent Memory](./PERSISTENT_MEMORY.md) tier and is projected on demand.
+### Directory Purposes
 
-## Interfaces
+| Directory | Purpose |
+|-----------|---------|
+| `config.toml` | User-level configuration merged with project and system configs. See [Configuration](./CONFIGURATION.md). |
+| `config.lock.json` | The resolved, validated config after merging all sources. Read by subsystems. Do not edit manually. |
+| `data/` | Persistent storage. `aidevos.db` holds runs, sessions, agent groups, and the fact/entity knowledge graph. `vector.db` holds embedding vectors for semantic search. |
+| `keys/` | Auto-generated Ed25519 key pair for signing local requests and envelopes. Regenerated on loss (old signatures become unverifiable). |
+| `secrets/` | Encrypted provider API keys and secrets. Managed exclusively through CLI commands; never edit manually. |
+| `plugins/` | Plugin registry and installations. `index.json` tracks installed plugins and their versions. See [Plugin SDK](./PLUGIN_SDK.md). |
+| `rules/` | User-authored AI coding rules loaded into the Kernel context. Rules are merged with project-level rules at runtime. |
+| `mcp.d/` | MCP (Model Context Protocol) server configurations. Each file declares one MCP server endpoint. |
+| `cache/` | Ephemeral caches with TTL-based eviction. Safe to delete; re-populated on demand. |
+| `logs/` | Application logs. Rotated automatically. Log level and format controlled by `[logging]` config. |
 
-- See related subsystems for the concrete API surface this document constrains.
+## The Workspace Vault Structure
 
-All interfaces follow the envelope defined in [Agent Communication](./AGENT_COMMUNICATION.md) and the error contract defined in [API Spec](./API_SPEC.md).
+Each project or workspace gets a vault directory — either `.aidevos/` inside the project root or a dedicated vault path set in config.
 
-## Data Model
+```
+project-root/
+└── .aidevos/                  # Workspace vault (hidden, in project root)
+    ├── vault.toml             # Vault metadata (name, description)
+    ├── knowledge/
+    │   ├── entities/          # Entity definitions (YAML)
+    │   ├── facts/             # Fact assertions (YAML)
+    │   └── vectors/           # Local vector index
+    ├── sessions/
+    │   └── (session snapshots, one per active session)
+    ├── runs/
+    │   └── (recent run logs, synced to global DB)
+    └── rules/
+        └── (project-specific AI coding rules)
+```
 
-- Entities and fields are declared in the referenced subsystems and in [DATABASE](./DATABASE.md).
+Workspace vaults are optional. When present, they layer on top of the global `~/.aidevos/` — data is merged, with the workspace taking precedence for entity/fact resolution.
 
-Retention and encryption rules are inherited from [Data Retention](./DATA_RETENTION.md) and [Encryption](./ENCRYPTION.md).
+## The `ai-dev-docs-hub` Repository Structure
 
-## Failure Modes
+This repository — the one containing this document — follows this layout:
 
-- Every failure surfaces through the Shared Context Engine and the audit log.
-- Degradation is preferred over hard failure whenever safety permits.
-
-Every failure emits a structured event on the Shared Context Engine and is recorded in the [Audit Log](./AUDIT_LOG.md).
-
-## Security Considerations
-
-- Trust boundary: crosses only through signed envelopes (see [Security Model](./SECURITY_MODEL.md)).
-- Secrets are read from [Secrets Management](./SECRETS_MANAGEMENT.md); never inlined.
-- All external calls go through [Model Providers](./MODEL_PROVIDERS.md) or the [Plugin SDK](./PLUGIN_SDK.md) — no ad-hoc network access.
-
-## Observability
-
-- Metrics, traces, and logs conform to [Observability](./OBSERVABILITY.md), [Tracing](./TRACING.md), and [Logging](./LOGGING.md).
-- Every run carries a `correlation_id` propagated from the Kernel.
-
-## Acceptance Criteria
-
-- The contracts above are testable via the [Eval Harness](./EVAL_HARNESS.md).
-- A change to this document requires a matching update to any dependent doc listed in *Related Documents*.
-
-## Open Questions
-
-- _Track open questions as ADRs under [templates/ADR](../templates/ADR.md)._
+```
+ai-dev-docs-hub/
+├── docs/                      # All documentation (this directory)
+│   ├── README.md              # Root index
+│   ├── GETTING_STARTED.md     # Getting started guide
+│   ├── INSTALLATION.md        # Installation guide
+│   ├── CLI.md                 # CLI reference
+│   ├── CONFIGURATION.md       # Configuration reference
+│   ├── ... (100+ subsystem docs)
+│   └── knowledge-bases/       # Knowledge base markdown
+├── prompts/                   # Prompt templates and governance
+│   ├── templates/             # Reusable prompt fragments
+│   ├── system/                # System-level prompts
+│   └── governance/            # Prompt policy definitions
+├── diagrams/                  # Mermaid and other diagram sources
+├── templates/                 # Templates (ADRs, issue templates, etc.)
+│   ├── ADR.md                 # Architecture Decision Record template
+│   └── issue-template.md      # GitHub issue template
+├── src/                       # Source code reference (spec stubs, validation schemas)
+│   ├── schemas/               # JSON Schema files for config validation
+│   └── examples/              # Example config files and outputs
+├── scripts/                   # Utility scripts (lint, validate links, cross-ref)
+├── tests/                     # Documentation tests (link checks, schema validation)
+├── .github/                   # GitHub workflows, issue templates
+├── AGENTS.md                  # Guidance for AI agents editing this repo
+└── README.md                  # Repository root README
+```
 
 ## Related Documents
 
-- [System Overview](./SYSTEM_OVERVIEW.md)
-- [Main Ai Kernel](./MAIN_AI_KERNEL.md)
-- [Prd](./PRD.md)
-- [Trd](./TRD.md)
-- [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)
+- [Configuration](./CONFIGURATION.md) — config file format and key reference
+- [CLI](./CLI.md) — command reference including vault management
+- [Local Dev](./LOCAL_DEV.md) — setting up a development environment
+- [Database](./DATABASE.md) — SQLite schema reference
+- [Plugin SDK](./PLUGIN_SDK.md) — plugin directory structure and manifest format
+- [Secrets Management](./SECRETS_MANAGEMENT.md) — secrets storage encryption

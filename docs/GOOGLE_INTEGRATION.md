@@ -1,88 +1,120 @@
 # Google Integration
 
-> Specification for the Google Integration subsystem of the AI Development Operating System. This document is normative — implementations MUST satisfy every MUST clause below.
+> Provider adapter implementation guide for the Google AI (Gemini) API. Extends [Model Providers](./MODEL_PROVIDERS.md) with Google-specific configuration, safety settings, grounding, and streaming handling.
 
 ## Overview
 
-Google Integration is a first-class subsystem of the AI Development Operating System (AI Dev OS). It participates in the Kernel's intake → plan → route → execute → critique → merge → guard → deliver loop and communicates exclusively through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md). This document defines its purpose, contracts, invariants, and failure modes so that AI agents can reason about it without inspecting any implementation.
+The Google adapter connects the Nine Router to Gemini models via `generativelanguage.googleapis.com`. Google uses a resource-oriented REST API with query-parameter authentication and NDJSON streaming. The adapter normalizes these to the standard `ChatRequest` / `ChatChunk` interface.
 
-## Goals
+## Endpoint Configuration
 
-- Provide an authoritative, unambiguous specification for this subsystem.
-- Define contracts, invariants, and acceptance criteria consumed by AI agents.
-- Stay small enough to review, large enough to remove ambiguity.
-
-## Non-Goals
-
-- Implementation code — this repository is documentation-only (see [AI Coding Rules](./AI_CODING_RULES.md)).
-- Vendor-specific tuning beyond what [Model Providers](./MODEL_PROVIDERS.md) allows.
-- Duplicating contracts that belong to another subsystem; link instead.
-
-## Requirements
-
-- **MUST** be consumable by both humans and AI agents.
-- **MUST** publish every state change to the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md).
-- **MUST** pass every rule enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
-- **MUST** be observable through the metrics defined in [Observability](./OBSERVABILITY.md).
-- **SHOULD** degrade gracefully rather than fail hard.
-- **MAY** be extended via the [Plugin SDK](./PLUGIN_SDK.md) when the extension point is declared here.
-
-## Architecture
-
-```mermaid
-flowchart LR
-  IN([Input]) --> SUB[Google Integration]
-  SUB --> CTX[(Shared Context Engine)]
-  SUB --> GUARD{Architecture Guardian}
-  GUARD -->|ok| OUT([Output])
-  GUARD -->|veto| SUB
+```
+base_url: https://generativelanguage.googleapis.com/v1beta
+auth:     ?key=${GOOGLE_API_KEY}
 ```
 
-The subsystem is stateless at the process boundary; all durable state lives in the [Persistent Memory](./PERSISTENT_MEMORY.md) tier and is projected on demand.
+API keys **MUST** be provisioned from [Google AI Studio](https://aistudio.google.com/app/apikey) and read from [Secrets Management](./SECRETS_MANAGEMENT.md).
 
-## Interfaces
+```yaml
+providers:
+  google:
+    api_key: ${GOOGLE_API_KEY}
+    base_url: https://generativelanguage.googleapis.com/v1beta
+```
 
-- See related subsystems for the concrete API surface this document constrains.
+## Models
 
-All interfaces follow the envelope defined in [Agent Communication](./AGENT_COMMUNICATION.md) and the error contract defined in [API Spec](./API_SPEC.md).
+| Model ID | Context | Max output | Pricing (input / output per MTok) | Capabilities |
+|----------|---------|-----------|-----------------------------------|--------------|
+| `gemini-2.5-pro-exp-03-25` | 1,048,576 | 65,536 | $1.25–$10.00 / $5.00–$40.00 | Text, vision, audio, code exec, grounding, function calling |
+| `gemini-2.5-flash-preview-04-17` | 1,048,576 | 65,536 | $0.15–$0.60 / $0.60–$2.40 | Text, vision, audio, grounding, function calling |
+| `gemini-2.0-flash-lite-preview-02-05` | 1,048,576 | 8,192 | $0.075–$0.30 / $0.30–$1.20 | Text, vision, function calling |
 
-## Data Model
+Pricing tiers: requests up to 200K tokens use the lower price; exceeding 200K uses the higher price.
 
-- Entities and fields are declared in the referenced subsystems and in [DATABASE](./DATABASE.md).
+## API Format
 
-Retention and encryption rules are inherited from [Data Retention](./DATA_RETENTION.md) and [Encryption](./ENCRYPTION.md).
+### Request
 
-## Failure Modes
+```
+POST /v1beta/models/{model}:streamGenerateContent?key={key}
+{
+  "contents": [{ "role": "user", "parts": [{ "text": "Hello" }] }],
+  "systemInstruction": { "parts": [{ "text": "You are a helpful assistant." }] },
+  "generationConfig": { "temperature": 0.7, "maxOutputTokens": 4096 },
+  "safetySettings": [
+    { "category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE" },
+    { "category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_MEDIUM_AND_ABOVE" },
+    { "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_MEDIUM_AND_ABOVE" },
+    { "category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE" }
+  ]
+}
+```
 
-- Every failure surfaces through the Shared Context Engine and the audit log.
-- Degradation is preferred over hard failure whenever safety permits.
+### Streaming
 
-Every failure emits a structured event on the Shared Context Engine and is recorded in the [Audit Log](./AUDIT_LOG.md).
+Response is NDJSON (one JSON object per line). The adapter **MUST**:
 
-## Security Considerations
+1. Parse each line as independent JSON.
+2. Extract `candidates[0].content.parts[0].text` as token delta.
+3. Track `candidates[0].finishReason` for completion.
+4. Emit `ChatChunk { type: "token", delta }` per non-empty text part.
+5. On finish, emit `ChatChunk { type: "finish", finish_reason, usage }` from `usageMetadata`.
 
-- Trust boundary: crosses only through signed envelopes (see [Security Model](./SECURITY_MODEL.md)).
-- Secrets are read from [Secrets Management](./SECRETS_MANAGEMENT.md); never inlined.
-- All external calls go through [Model Providers](./MODEL_PROVIDERS.md) or the [Plugin SDK](./PLUGIN_SDK.md) — no ad-hoc network access.
+## System Instruction
 
-## Observability
+Google uses a top-level `systemInstruction` field. The adapter **MUST** extract the first `system`-role message and place it there. Omit if no system message exists.
 
-- Metrics, traces, and logs conform to [Observability](./OBSERVABILITY.md), [Tracing](./TRACING.md), and [Logging](./LOGGING.md).
-- Every run carries a `correlation_id` propagated from the Kernel.
+## Grounding with Google Search
 
-## Acceptance Criteria
+```json
+{
+  "tools": [{ "googleSearchGrounding": {} }]
+}
+```
 
-- The contracts above are testable via the [Eval Harness](./EVAL_HARNESS.md).
-- A change to this document requires a matching update to any dependent doc listed in *Related Documents*.
+Response includes `groundingMetadata` with source URLs and confidence scores. The adapter **MUST** propagate this as structured metadata on the final `ChatChunk`. Grounding is available on Gemini 2.5 and 2.0 Flash models at higher pricing tiers.
 
-## Open Questions
+## Safety Settings
 
-- _Track open questions as ADRs under [templates/ADR](../templates/ADR.md)._
+| Threshold | Behavior |
+|-----------|----------|
+| `BLOCK_ONLY_HIGH` | Block only on HIGH probability |
+| `BLOCK_MEDIUM_AND_ABOVE` | Block on MEDIUM or HIGH (default) |
+| `BLOCK_LOW_AND_ABOVE` | Block on LOW+, MEDIUM+, or HIGH |
+| `BLOCK_NONE` | Always show |
+
+Categories: `HARM_CATEGORY_HARASSMENT`, `HARM_CATEGORY_HATE_SPEECH`, `HARM_CATEGORY_SEXUALLY_EXPLICIT`, `HARM_CATEGORY_DANGEROUS_CONTENT`, `HARM_CATEGORY_CIVIC_INTEGRITY`.
+
+When blocked, `finishReason` is `SAFETY`. The adapter surfaces `ChatChunk { type: "error", finish_reason: "content_filter" }`.
+
+## Rate Limits
+
+| Tier | Requests/min | Tokens/min |
+|------|-------------|------------|
+| Free | 60 | 1,000,000 |
+| Pay-as-you-go | 2,000 | 4,000,000 |
+
+The adapter **MUST** track `x-ratelimit-remaining` and `x-ratelimit-reset` headers. Google does not use `Retry-After` — wait for the duration in `x-ratelimit-reset`.
+
+## Error Codes
+
+| HTTP | Status | Adapter action |
+|------|--------|----------------|
+| 400 | `INVALID_ARGUMENT` | Surface validation error |
+| 401 | `UNAUTHENTICATED` | Mark `auth_error` |
+| 403 | `PERMISSION_DENIED` | Mark `auth_error`; check key scope |
+| 404 | `NOT_FOUND` | Trigger re-discovery |
+| 429 | `RESOURCE_EXHAUSTED` | Backoff; mark `rate_limited` |
+| 429 | `QUOTA_EXCEEDED` | Mark `quota_exceeded`; billing alert |
+| 500+ | Internal | Retry × 3 exponential backoff; mark `degraded` |
 
 ## Related Documents
 
-- [System Overview](./SYSTEM_OVERVIEW.md)
-- [Main Ai Kernel](./MAIN_AI_KERNEL.md)
-- [Prd](./PRD.md)
-- [Trd](./TRD.md)
-- [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)
+- [Model Providers](./MODEL_PROVIDERS.md)
+- [Nine Router](./NINE_ROUTER.md)
+- [Cost Management](./COST_MANAGEMENT.md)
+- [Model Discovery](./MODEL_DISCOVERY.md)
+- [Secrets Management](./SECRETS_MANAGEMENT.md)
+- [Streaming Responses](./STREAMING_RESPONSES.md)
+- [Tool Calling](./TOOL_CALLING.md)

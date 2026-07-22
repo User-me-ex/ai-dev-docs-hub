@@ -1,88 +1,132 @@
 # Symbol Registry
 
-> Specification for the Symbol Registry subsystem of the AI Development Operating System. This document is normative — implementations MUST satisfy every MUST clause below.
+**Component ID:** core.symbol-registry  
+**Status:** Active  
+**Version:** 1.0.0  
+**Last Updated:** 2026-07-22
+
+---
 
 ## Overview
 
-Symbol Registry is a first-class subsystem of the AI Development Operating System (AI Dev OS). It participates in the Kernel's intake → plan → route → execute → critique → merge → guard → deliver loop and communicates exclusively through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md). This document defines its purpose, contracts, invariants, and failure modes so that AI agents can reason about it without inspecting any implementation.
+The Symbol Registry provides a centralized index of all named symbols (functions, classes, variables, types, interfaces) declared across the codebase. It is the foundation for impact analysis, dependency resolution, and cross-module navigation.
 
-## Goals
+Without a symbol registry, the system has no way to answer questions like "which files depend on this function?" or "if I change this class, what breaks?" — making refactoring, deletion, and renaming dangerous operations. The registry solves this by maintaining an always-up-to-date, queryable map of every symbol and its relationships.
 
-- Provide an authoritative, unambiguous specification for this subsystem.
-- Define contracts, invariants, and acceptance criteria consumed by AI agents.
-- Stay small enough to review, large enough to remove ambiguity.
+The registry is decoupled from any single parser or language. Language-specific extractors (Python, TypeScript, Rust, Go) push symbol records into the same schema, enabling unified analysis across polyglot projects.
 
-## Non-Goals
+---
 
-- Implementation code — this repository is documentation-only (see [AI Coding Rules](./AI_CODING_RULES.md)).
-- Vendor-specific tuning beyond what [Model Providers](./MODEL_PROVIDERS.md) allows.
-- Duplicating contracts that belong to another subsystem; link instead.
+## Symbol Schema
 
-## Requirements
+Each registered symbol is stored as a `SymbolRecord`:
 
-- **MUST** be consumable by both humans and AI agents.
-- **MUST** publish every state change to the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md).
-- **MUST** pass every rule enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
-- **MUST** be observable through the metrics defined in [Observability](./OBSERVABILITY.md).
-- **SHOULD** degrade gracefully rather than fail hard.
-- **MAY** be extended via the [Plugin SDK](./PLUGIN_SDK.md) when the extension point is declared here.
+| Field       | Type               | Description                                        |
+|-------------|--------------------|----------------------------------------------------|
+| `name`      | `string`           | Fully qualified symbol name (e.g. `auth.login`)    |
+| `kind`      | `SymbolKind`       | Enum: `function`, `class`, `variable`, `type`, `interface`, `enum`, `method`, `property`, `parameter` |
+| `file`      | `string`           | Absolute path to the declaring file                |
+| `line`      | `number`           | 1-indexed line number of declaration               |
+| `column`    | `number`           | 0-indexed column number                            |
+| `exports`   | `boolean`          | Whether the symbol is exported from its module     |
+| `imports`   | `Array<ImportRef>` | Symbols this file imports, with source paths       |
+| `docstring` | `string?`          | Optional doc comment extracted from source         |
+| `tags`      | `Array<string>`    | Optional classification tags (e.g. `deprecated`, `internal`) |
 
-## Architecture
+An `ImportRef` is defined as:
 
-```mermaid
-flowchart LR
-  IN([Input]) --> SUB[Symbol Registry]
-  SUB --> CTX[(Shared Context Engine)]
-  SUB --> GUARD{Architecture Guardian}
-  GUARD -->|ok| OUT([Output])
-  GUARD -->|veto| SUB
+```typescript
+interface ImportRef {
+  source: string;       // Module path or package name
+  importedName: string; // Name as used locally
+  exportedName: string; // Name in the source module
+}
 ```
 
-The subsystem is stateless at the process boundary; all durable state lives in the [Persistent Memory](./PERSISTENT_MEMORY.md) tier and is projected on demand.
+---
 
 ## Interfaces
 
-- See related subsystems for the concrete API surface this document constrains.
+### `registry.register(symbol: SymbolRecord): void`
 
-All interfaces follow the envelope defined in [Agent Communication](./AGENT_COMMUNICATION.md) and the error contract defined in [API Spec](./API_SPEC.md).
+Inserts or updates a symbol. If a symbol with the same `name` and `file` already exists, it is overwritten. The registry re-indexes all import edges after registration.
 
-## Data Model
+```typescript
+registry.register({
+  name: "auth.verify_token",
+  kind: "function",
+  file: "/src/auth/tokens.ts",
+  line: 42,
+  column: 0,
+  exports: true,
+  imports: [
+    { source: "jsonwebtoken", importedName: "verify", exportedName: "verify" }
+  ]
+});
+```
 
-- Entities and fields are declared in the referenced subsystems and in [DATABASE](./DATABASE.md).
+### `registry.lookup(name: string, scope?: string): SymbolRecord | null`
 
-Retention and encryption rules are inherited from [Data Retention](./DATA_RETENTION.md) and [Encryption](./ENCRYPTION.md).
+Looks up a symbol by fully qualified name. An optional `scope` parameter scopes the search to a specific module. Returns `null` if not found.
+
+### `registry.find_references(name: string, options?: FindReferencesOptions): Array<SymbolReference>`
+
+Returns every location where a symbol is referenced (not declared). Each result includes the referencing file, line, column, and the kind of reference (direct import, dynamic import, type reference, string reference).
+
+```typescript
+interface SymbolReference {
+  file: string;
+  line: number;
+  column: number;
+  kind: "import" | "call" | "type" | "property" | "string";
+}
+```
+
+### `registry.dependency_graph(file?: string, depth?: number): DependencyGraph`
+
+Returns a full or scoped dependency graph. When `file` is omitted, returns the graph for the entire codebase. The `depth` parameter limits transitive resolution.
+
+```typescript
+interface DependencyGraph {
+  nodes: Array<{ name: string; file: string; kind: SymbolKind }>;
+  edges: Array<{ from: string; to: string; kind: "imports" | "calls" | "extends" | "implements" }>;
+}
+```
+
+---
+
+## Integration with Impact Analysis
+
+The Symbol Registry is the primary data source for the Impact Analysis engine. When a file changes, impact analysis:
+
+1. Calls `registry.lookup()` for each symbol in the changed file.
+2. Calls `registry.find_references()` to discover all dependents.
+3. Calls `registry.dependency_graph()` to compute the transitive closure of affected files.
+4. Renders the result as a ranked list of affected symbols and files.
+
+---
+
+## Integration with Obsidian Graph Engine
+
+The Obsidian Graph Engine consumes `dependency_graph()` output to render interactive dependency visualizations. Nodes are symbols (color-coded by `kind`), and edges represent import, call, or inheritance relationships. The graph supports drill-down: clicking a node fetches `find_references()` for that symbol.
+
+---
 
 ## Failure Modes
 
-- Every failure surfaces through the Shared Context Engine and the audit log.
-- Degradation is preferred over hard failure whenever safety permits.
+| Mode                | Cause                                  | Effect                                        | Mitigation                              |
+|---------------------|----------------------------------------|-----------------------------------------------|-----------------------------------------|
+| Stale index         | File updated outside the watcher       | References point to outdated declarations     | File-system watcher reconciliation      |
+| Ambiguous symbol    | Two modules export the same name       | `lookup()` returns arbitrary match            | Require fully-qualified names           |
+| Circular import     | A imports B imports A                  | `dependency_graph()` infinite loop            | Depth limit + cycle detection           |
+| Missing parser      | File in unsupported language           | Symbol silently omitted                       | Warning log for unhandled extensions    |
+| Large codebase      | >100K symbols                          | Slow query times                              | Lazy-loading, paginated `find_references` |
 
-Every failure emits a structured event on the Shared Context Engine and is recorded in the [Audit Log](./AUDIT_LOG.md).
-
-## Security Considerations
-
-- Trust boundary: crosses only through signed envelopes (see [Security Model](./SECURITY_MODEL.md)).
-- Secrets are read from [Secrets Management](./SECRETS_MANAGEMENT.md); never inlined.
-- All external calls go through [Model Providers](./MODEL_PROVIDERS.md) or the [Plugin SDK](./PLUGIN_SDK.md) — no ad-hoc network access.
-
-## Observability
-
-- Metrics, traces, and logs conform to [Observability](./OBSERVABILITY.md), [Tracing](./TRACING.md), and [Logging](./LOGGING.md).
-- Every run carries a `correlation_id` propagated from the Kernel.
-
-## Acceptance Criteria
-
-- The contracts above are testable via the [Eval Harness](./EVAL_HARNESS.md).
-- A change to this document requires a matching update to any dependent doc listed in *Related Documents*.
-
-## Open Questions
-
-- _Track open questions as ADRs under [templates/ADR](../templates/ADR.md)._
+---
 
 ## Related Documents
 
-- [System Overview](./SYSTEM_OVERVIEW.md)
-- [Main Ai Kernel](./MAIN_AI_KERNEL.md)
-- [Prd](./PRD.md)
-- [Trd](./TRD.md)
-- [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)
+- FUNCTION_REGISTRY.md — Function-specific registry layer
+- CLASS_REGISTRY.md — Class/type-specific registry layer
+- VARIABLE_REGISTRY.md — Environment variable and config tracking
+- ARCHITECTURE_GUARDIAN.md — System-wide architectural enforcement

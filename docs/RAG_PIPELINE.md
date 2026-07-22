@@ -1,88 +1,199 @@
-# Rag Pipeline
+# RAG Pipeline
 
-> Specification for the Rag Pipeline subsystem of the AI Development Operating System. This document is normative — implementations MUST satisfy every MUST clause below.
+> **Domain:** Retrieval-Augmented Generation
+> **Applies to:** Kernel, Agents, Knowledge System, Vector Store, Obsidian Graph Engine
+> **Last updated:** 2026-07-22
 
 ## Overview
 
-Rag Pipeline is a first-class subsystem of the AI Development Operating System (AI Dev OS). It participates in the Kernel's intake → plan → route → execute → critique → merge → guard → deliver loop and communicates exclusively through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md). This document defines its purpose, contracts, invariants, and failure modes so that AI agents can reason about it without inspecting any implementation.
+AI Dev OS uses a **hybrid retrieval** strategy that combines three complementary signals: keyword (BM25), semantic (ANN), and relational (graph). Each signal captures a different aspect of relevance; their results are fused via reciprocal rank fusion to produce a single ranked list.
 
-## Goals
-
-- Provide an authoritative, unambiguous specification for this subsystem.
-- Define contracts, invariants, and acceptance criteria consumed by AI agents.
-- Stay small enough to review, large enough to remove ambiguity.
-
-## Non-Goals
-
-- Implementation code — this repository is documentation-only (see [AI Coding Rules](./AI_CODING_RULES.md)).
-- Vendor-specific tuning beyond what [Model Providers](./MODEL_PROVIDERS.md) allows.
-- Duplicating contracts that belong to another subsystem; link instead.
-
-## Requirements
-
-- **MUST** be consumable by both humans and AI agents.
-- **MUST** publish every state change to the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md).
-- **MUST** pass every rule enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
-- **MUST** be observable through the metrics defined in [Observability](./OBSERVABILITY.md).
-- **SHOULD** degrade gracefully rather than fail hard.
-- **MAY** be extended via the [Plugin SDK](./PLUGIN_SDK.md) when the extension point is declared here.
-
-## Architecture
-
-```mermaid
-flowchart LR
-  IN([Input]) --> SUB[Rag Pipeline]
-  SUB --> CTX[(Shared Context Engine)]
-  SUB --> GUARD{Architecture Guardian}
-  GUARD -->|ok| OUT([Output])
-  GUARD -->|veto| SUB
+```
+                    ┌──────────┐
+                    │  Query   │
+                    └─────┬────┘
+                          │
+               ┌──────────┼──────────┐
+               ▼          ▼          ▼
+           ┌──────┐  ┌──────┐  ┌────────┐
+           │ BM25 │  │ ANN  │  │ Graph  │
+           │FTS5  │  │HNSW  │  │Neighbor│
+           │SQLite│  │cosine│  │Depth 1 │
+           └──┬───┘  └──┬───┘  └───┬────┘
+              │         │          │
+              └─────────┼──────────┘
+                        ▼
+                ┌──────────────┐
+                │ Rank Fusion  │
+                │ (RRF, conf)  │
+                └──────┬───────┘
+                       ▼
+                ┌──────────────┐
+                │  Context     │
+                │  Assembly    │
+                └──────┬───────┘
+                       ▼
+                ┌──────────────┐
+                │  Prompt +    │
+                │  Generate    │
+                └──────────────┘
 ```
 
-The subsystem is stateless at the process boundary; all durable state lives in the [Persistent Memory](./PERSISTENT_MEMORY.md) tier and is projected on demand.
+## Query Flow
+
+```
+rag.retrieve(query, { top_k: 20, weights: { bm25: 0.4, ann: 0.4, graph: 0.2 } })
+  │
+  ├─ 1. embed(query) → query_vector (768-d, normalized)
+  │
+  ├─ 2. BM25 search: SQLite FTS5, top 20
+  │
+  ├─ 3. ANN search: Vector Store, top 20, cosine similarity
+  │
+  ├─ 4. Graph expansion: Obsidian Graph Engine neighbors (depth 1), top 10
+  │
+  ├─ 5. RRF fusion: Reciprocal Rank Fusion on all candidates
+  │
+  └─ 6. Context assembly: select top-K within token budget
+```
+
+## BM25 (Keyword)
+
+| Component | Detail |
+|-----------|--------|
+| **Engine** | SQLite FTS5 (Full-Text Search) |
+| **Table** | `fts_content(content_id, title, body, metadata)` |
+| **Weights** | Title: 3.0, Body: 1.0, Metadata: 0.5 |
+| **Tokenization** | Unicode61 tokenizer with tokenchars |
+| **Ranking** | BM25 with default parameters (k1=1.2, b=0.75) |
+
+BM25 is optimized for exact keyword matching. It is particularly effective for code, identifiers, and structured terms.
+
+## ANN (Semantic)
+
+| Component | Detail |
+|-----------|--------|
+| **Engine** | usearch HNSW index (see [Vector Store](VECTOR_STORE.md)) |
+| **Metric** | Cosine similarity |
+| **Default top-K** | 20 |
+| **Query vector** | 768-d L2-normalized `float32` array |
+| **Filters applied** | Optional metadata filters passed through from the caller |
+
+ANN captures semantic similarity — documents that use different words but mean the same thing.
+
+## Graph Expansion
+
+| Component | Detail |
+|-----------|--------|
+| **Engine** | Obsidian Graph Engine |
+| **Traversal** | Depth 1 (direct neighbors of any document matched by BM25 or ANN) |
+| **Edge types** | `references`, `related`, `contained_in`, `derived_from` |
+| **Max neighbors** | 10 per seed document |
+| **Score** | Edge weight (0.0–1.0) assigned by the graph engine |
+
+Graph expansion pulls in structurally related content — e.g., a function's callers, a document's parent section, or an agent memory's related context.
+
+## Rank Fusion
+
+Reciprocal Rank Fusion (RRF) combines the three ranked lists:
+
+```
+RRF_score(d) = w_bm25 * (1 / (k + rank_bm25(d)))
+             + w_ann  * (1 / (k + rank_ann(d)))
+             + w_graph * (1 / (k + rank_graph(d)))
+```
+
+**Default weights:**
+
+| Signal | Weight | Notes |
+|--------|--------|-------|
+| BM25 | 0.4 | Strongest for code and exact terminology. |
+| ANN | 0.4 | Equal weight — semantic match is as important as keyword. |
+| Graph | 0.2 | Lower weight — graph is supplementary context, not primary. |
+
+**Constant `k`:** 60 (standard RRF parameter to dampen high-rank outliers).
+
+Weights are configurable per query in `rag.retrieve(query, { weights: {...} })`.
+
+## Context Assembly
+
+After fusion, the top-ranked chunks are assembled into a prompt context:
+
+```typescript
+function assemble(chunks: Chunk[], budget: number): string {
+  // 1. Sort by RRF score descending
+  chunks.sort((a, b) => b.rrf_score - a.rrf_score);
+
+  // 2. Deduplicate by content hash
+  chunks = deduplicate(chunks);
+
+  // 3. Greedily fill token budget
+  let context = "";
+  for (const chunk of chunks) {
+    if (countTokens(context + chunk.text) > budget) break;
+    context += chunk.text + "\n\n---\n\n";
+  }
+
+  return context;
+}
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `budget` | 4096 tokens | Max tokens for assembled context. |
+| `max_chunks` | 15 | Hard limit on number of chunks (even if within budget). |
+| `deduplicate` | true | Hash-based dedup with SHA-256 of chunk text. |
+
+## Chunking Strategy
+
+Documents are segmented before indexing:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| **Max chunk tokens** | 512 | Approximate — chunk at sentence boundaries. |
+| **Overlap** | 64 tokens | Sliding window overlap between adjacent chunks. |
+| **Strategy** | Recursive text split | Attempts to split at paragraph → sentence → token boundaries. |
+| **Code chunks** | 128 tokens | Smaller chunks for code content (functions, methods). |
+
+Chunks are stored in the Knowledge System and referenced by the BM25 FTS5 index and the Vector Store.
 
 ## Interfaces
 
-- See related subsystems for the concrete API surface this document constrains.
-
-All interfaces follow the envelope defined in [Agent Communication](./AGENT_COMMUNICATION.md) and the error contract defined in [API Spec](./API_SPEC.md).
-
-## Data Model
-
-- Entities and fields are declared in the referenced subsystems and in [DATABASE](./DATABASE.md).
-
-Retention and encryption rules are inherited from [Data Retention](./DATA_RETENTION.md) and [Encryption](./ENCRYPTION.md).
+| Interface | Description |
+|-----------|-------------|
+| `rag.retrieve(query, opts?)` | Full hybrid retrieval. Returns `Chunk[]` with RRF scores. |
+| `rag.rerank(chunks, query)` | Re-rank a list of chunks against a query using cross-encoder (if available) or RRF. |
+| `rag.assemble(chunks, budget)` | Assemble top chunks into a prompt-ready context string. |
+| `rag.search_mode(mode)` | Switch between `hybrid` (default), `keyword_only`, `semantic_only`, or `graph_only`. |
+| `rag.stats()` | Return query latency breakdown, cache hit rates, chunk counts. |
 
 ## Failure Modes
 
-- Every failure surfaces through the Shared Context Engine and the audit log.
-- Degradation is preferred over hard failure whenever safety permits.
+| Failure | Symptom | Recovery |
+|---------|---------|----------|
+| **No results** | All three retrievers return empty. | Return a clear "no relevant context found" message. The agent can fall back to its own knowledge. |
+| **Embedding unavailable** | ANN step fails (model down, timeout). | Skip ANN, run BM25 + Graph only. Log the embedding failure. |
+| **Context overflow** | Assembled context exceeds token budget. | Enforce hard truncation at the token budget. The earliest (highest-scored) chunks are preserved. |
+| **Graph engine unavailable** | Graph expansion step fails. | Skip graph expansion, run BM25 + ANN only. |
+| **BM25 index stale** | FTS5 index hasn't been updated after a write. | Trigger a manual `kb.fts.rebuild()` or rely on the 60-second auto-refresh. |
 
-Every failure emits a structured event on the Shared Context Engine and is recorded in the [Audit Log](./AUDIT_LOG.md).
+## Observability Metrics
 
-## Security Considerations
-
-- Trust boundary: crosses only through signed envelopes (see [Security Model](./SECURITY_MODEL.md)).
-- Secrets are read from [Secrets Management](./SECRETS_MANAGEMENT.md); never inlined.
-- All external calls go through [Model Providers](./MODEL_PROVIDERS.md) or the [Plugin SDK](./PLUGIN_SDK.md) — no ad-hoc network access.
-
-## Observability
-
-- Metrics, traces, and logs conform to [Observability](./OBSERVABILITY.md), [Tracing](./TRACING.md), and [Logging](./LOGGING.md).
-- Every run carries a `correlation_id` propagated from the Kernel.
-
-## Acceptance Criteria
-
-- The contracts above are testable via the [Eval Harness](./EVAL_HARNESS.md).
-- A change to this document requires a matching update to any dependent doc listed in *Related Documents*.
-
-## Open Questions
-
-- _Track open questions as ADRs under [templates/ADR](../templates/ADR.md)._
+| Metric | Type | Labels |
+|--------|------|--------|
+| `rag_queries_total` | Counter | mode (hybrid/keyword/semantic/graph), status (success/partial/failure) |
+| `rag_retrieval_latency_seconds` | Histogram | step (bm25/ann/graph/fusion/assembly) |
+| `rag_chunks_retrieved` | Histogram | source (bm25/ann/graph) |
+| `rag_context_tokens` | Histogram | status (truncated/full) |
+| `rag_no_results_total` | Counter | reason (all_empty/budget_exceeded) |
 
 ## Related Documents
 
-- [System Overview](./SYSTEM_OVERVIEW.md)
-- [Main Ai Kernel](./MAIN_AI_KERNEL.md)
-- [Prd](./PRD.md)
-- [Trd](./TRD.md)
-- [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)
+| Document | Description |
+|----------|-------------|
+| [Knowledge System](KNOWLEDGE_SYSTEM.md) | Main KB and Global KB architecture |
+| [Vector Store](VECTOR_STORE.md) | ANN vector index specification |
+| [Embeddings](EMBEDDINGS.md) | Embedding generation pipeline |
+| [Obsidian Graph Engine](OBSIDIAN_GRAPH.md) | Graph-based knowledge navigation |
+| [Persistent Memory](PERSISTENT_MEMORY.md) | Long-term memory backed by RAG |
+| [Agent Memory](AGENT_MEMORY.md) | Per-agent memory tiers |

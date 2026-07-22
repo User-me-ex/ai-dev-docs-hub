@@ -1,88 +1,117 @@
-# Third Party Apis
+# Third-Party APIs — External API Usage Policy
 
-> Specification for the Third Party Apis subsystem of the AI Development Operating System. This document is normative — implementations MUST satisfy every MUST clause below.
+> Policy and reference for every third-party HTTP API that AI Dev OS calls directly. This document is normative — implementations MUST satisfy every MUST clause below.
 
 ## Overview
 
-Third Party Apis is a first-class subsystem of the AI Development Operating System (AI Dev OS). It participates in the Kernel's intake → plan → route → execute → critique → merge → guard → deliver loop and communicates exclusively through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md). This document defines its purpose, contracts, invariants, and failure modes so that AI agents can reason about it without inspecting any implementation.
-
-## Goals
-
-- Provide an authoritative, unambiguous specification for this subsystem.
-- Define contracts, invariants, and acceptance criteria consumed by AI agents.
-- Stay small enough to review, large enough to remove ambiguity.
-
-## Non-Goals
-
-- Implementation code — this repository is documentation-only (see [AI Coding Rules](./AI_CODING_RULES.md)).
-- Vendor-specific tuning beyond what [Model Providers](./MODEL_PROVIDERS.md) allows.
-- Duplicating contracts that belong to another subsystem; link instead.
-
-## Requirements
-
-- **MUST** be consumable by both humans and AI agents.
-- **MUST** publish every state change to the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md).
-- **MUST** pass every rule enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
-- **MUST** be observable through the metrics defined in [Observability](./OBSERVABILITY.md).
-- **SHOULD** degrade gracefully rather than fail hard.
-- **MAY** be extended via the [Plugin SDK](./PLUGIN_SDK.md) when the extension point is declared here.
+Third-party APIs are remote HTTP endpoints called by the [Model Providers](./MODEL_PROVIDERS.md), [Integrations](./INTEGRATIONS.md), and [Research Engine](./RESEARCH_ENGINE.md) layers. Each API call passes through the HTTP client middleware stack (rate limiting, retry, metrics, tracing) defined here. This document covers the **what and how** of API consumption; configuration lives in the provider-specific doc linked from each row.
 
 ## Architecture
 
+Every third-party API call flows through a middleware pipeline:
+
 ```mermaid
 flowchart LR
-  IN([Input]) --> SUB[Third Party Apis]
-  SUB --> CTX[(Shared Context Engine)]
-  SUB --> GUARD{Architecture Guardian}
-  GUARD -->|ok| OUT([Output])
-  GUARD -->|veto| SUB
+  A[Subsystem] --> RATE[Rate Limiter]
+  RATE --> AUTH[Auth Injector]
+  AUTH --> RETRY[Retry Handler]
+  RETRY --> CACHE[Cache Layer]
+  CACHE --> CLIENT[HTTP Client]
+  CLIENT --> EXT[External API]
+  CLIENT --> OBS[Observability\nmiddleware]
+  OBS --> COST[Cost Tracker]
 ```
 
-The subsystem is stateless at the process boundary; all durable state lives in the [Persistent Memory](./PERSISTENT_MEMORY.md) tier and is projected on demand.
+The pipeline is implemented as a composable middleware stack. Each layer can short-circuit (e.g., cache hit returns immediately, rate limiter delays or rejects). All layers emit metrics and traces. See [Tracing](./TRACING.md) for span propagation details.
 
-## Interfaces
+## Requirements
 
-- See related subsystems for the concrete API surface this document constrains.
-
-All interfaces follow the envelope defined in [Agent Communication](./AGENT_COMMUNICATION.md) and the error contract defined in [API Spec](./API_SPEC.md).
-
-## Data Model
-
-- Entities and fields are declared in the referenced subsystems and in [DATABASE](./DATABASE.md).
-
-Retention and encryption rules are inherited from [Data Retention](./DATA_RETENTION.md) and [Encryption](./ENCRYPTION.md).
+- **MUST** enforce per-API rate limits defined in the dependency table below.
+- **MUST** inject auth credentials from [Secrets Management](./SECRETS_MANAGEMENT.md); never inline keys.
+- **MUST** apply a timeout per call; the timeout is specific to the API category.
+- **MUST** retry on 5xx and network errors with exponential backoff (1 s base, 30 s max, 3 max attempts).
+- **MUST** NOT retry on 4xx errors except 429 (rate-limited) and 408 (request timeout).
+- **MUST** reject calls to APIs that are not in the dependency table unless explicitly enabled via [Feature Flags](./FEATURE_FLAGS.md).
+- **SHOULD** cache GET responses according to [Caching Strategy](./CACHING_STRATEGY.md).
+- **SHOULD** circuit-break after 10 consecutive 5xx errors within a 60-second window for a given endpoint.
+- **MAY** batch concurrent identical requests within a 50 ms window to reduce API call volume.
 
 ## Failure Modes
 
-- Every failure surfaces through the Shared Context Engine and the audit log.
-- Degradation is preferred over hard failure whenever safety permits.
+| Mode | Detection | Response |
+|------|-----------|----------|
+| Rate limited (429) | HTTP 429 + Retry-After | Wait Retry-After seconds; if no Retry-After, wait 1 s; max 3 retries then escalate |
+| Quota exhausted (403) | HTTP 403 with quota message | Fail immediately; route to fallback API; alert operator |
+| Service unavailable (503) | HTTP 503 | Retry with backoff (3 attempts); then fallback |
+| Timeout | No response within deadline | Retry once; if timeout persists, fail and alert |
+| Circuit open | Consecutive errors > threshold | Fail fast (no call attempted) for 30 s; then half-open probe |
+| DNS / TLS failure | Connection error | Retry once; if persistent, mark provider degraded and fallback |
+| Unexpected payload | JSON parse error | Return `API_PARSE_ERROR`; log full response at debug level |
 
-Every failure emits a structured event on the Shared Context Engine and is recorded in the [Audit Log](./AUDIT_LOG.md).
+## API Usage Principles
 
-## Security Considerations
+1. **Cache aggressively** — GET responses SHOULD be cached with a TTL matching the API's `Cache-Control` headers or the staleness tolerance of the data. See [Caching Strategy](./CACHING_STRATEGY.md).
+2. **Handle 429s** — every client MUST respect `Retry-After` headers and MUST NOT retry more than once per rate-limit window without backoff. Repeated 429s escalate to the operator via [Observability](./OBSERVABILITY.md).
+3. **Respect `robots.txt`** — web-scraping APIs (SearXNG, Brave) MUST obey the target site's `robots.txt` and `Crawl-Delay` directives.
+4. **Queue writes** — all mutating API calls (POST, PUT, PATCH, DELETE) from agent orchestration MUST go through the [Job Scheduler](./JOB_SCHEDULER.md) or [Event Bus](./EVENT_BUS.md) flush path — never from an agent's hot path.
+5. **Timeout every call** — no unbounded waits. Default timeout is 30 s for LLM APIs, 10 s for search and registry APIs, 5 s for metadata and health checks.
+6. **No secrets in URLs** — API keys in query parameters are forbidden. Use the `Authorization` header exclusively. See [Secrets Management](./SECRETS_MANAGEMENT.md).
 
-- Trust boundary: crosses only through signed envelopes (see [Security Model](./SECURITY_MODEL.md)).
-- Secrets are read from [Secrets Management](./SECRETS_MANAGEMENT.md); never inlined.
-- All external calls go through [Model Providers](./MODEL_PROVIDERS.md) or the [Plugin SDK](./PLUGIN_SDK.md) — no ad-hoc network access.
+## API Dependency Table
 
-## Observability
+| API | Purpose | Rate Limits | Auth Method | Fallback | Config Doc |
+|-----|---------|-------------|-------------|----------|------------|
+| **OpenAI** | Chat completions, embeddings, STT | 5,000 RPM (tier 5) | `Authorization: Bearer <key>` | Route to Anthropic / Google | [OpenAI](./OPENAI_INTEGRATION.md) |
+| **Anthropic** | Chat, extended thinking | 1,000 RPM | `x-api-key: <key>` | Route to OpenAI / Google | [Anthropic](./ANTHROPIC_INTEGRATION.md) |
+| **Google Gemini** | Chat, embeddings | 1,500 RPM | `Authorization: Bearer <key>` | Route to OpenAI / Mistral | [Google](./GOOGLE_INTEGRATION.md) |
+| **Mistral** | Chat, embeddings | 500 RPM | `Authorization: Bearer <key>` | Route to OpenAI | [Mistral](./MISTRAL_INTEGRATION.md) |
+| **GitHub REST / GraphQL** | Code search, PR metadata, issues | 5,000 req/h (authenticated) | `Authorization: Bearer <pat>` | Return cached data | [GitHub](./GITHUB_ANALYSIS.md) |
+| **npm registry** | Package metadata, dependencies | 400 req/min (unauthenticated) | None (public) | Return cached index | — |
+| **PyPI JSON API** | Package metadata, dependencies | 100 req/min (unauthenticated) | None (public) | Return cached index | — |
+| **arXiv API** | Paper search, abstracts | 1 req/3 s (no bulk) | None (public) | Return cached results | — |
+| **SearXNG** | Federated web search | Configurable (instance limit) | None (self-hosted) | Route to Brave Search | — |
 
-- Metrics, traces, and logs conform to [Observability](./OBSERVABILITY.md), [Tracing](./TRACING.md), and [Logging](./LOGGING.md).
-- Every run carries a `correlation_id` propagated from the Kernel.
+## Cost Tracking
 
-## Acceptance Criteria
+Every third-party API call is cost-tracked at the middleware layer:
 
-- The contracts above are testable via the [Eval Harness](./EVAL_HARNESS.md).
-- A change to this document requires a matching update to any dependent doc listed in *Related Documents*.
+```
+ApiCostRecord {
+  provider:    string
+  model?:      string       # for LLM APIs
+  endpoint:    string       # path only, no query params
+  tokens_in?:  u32
+  tokens_out?: u32
+  cost_usd:    f64          # computed from rate card
+  timestamp:   rfc3339
+  run_id:      string
+}
+```
 
-## Open Questions
+Cost records are written to the [Audit Log](./AUDIT_LOG.md) and aggregated in [Cost Management](./COST_MANAGEMENT.md). Per-run cost is available via the Runs API.
 
-- _Track open questions as ADRs under [templates/ADR](../templates/ADR.md)._
+## Monitoring
+
+| Metric | Type | Source |
+|--------|------|--------|
+| `api_call_total{provider,endpoint,status}` | Counter | Every HTTP response |
+| `api_call_seconds{provider,endpoint}` | Histogram | Request duration |
+| `api_rate_limit_remaining{provider}` | Gauge | Remaining quota from response headers |
+| `api_rate_limit_reset_seconds{provider}` | Gauge | Seconds until quota reset |
+| `api_cost_usd_total{provider,model}` | Counter | Accumulated cost |
+| `api_errors_total{provider,code}` | Counter | 4xx and 5xx responses |
+| `api_cache_hit_ratio{provider}` | Gauge | Cache effectiveness |
+
+Alert thresholds: > 5 % error rate over 5 min for any provider triggers a warning in [Observability](./OBSERVABILITY.md). > 20 % rate-limited requests over 5 min triggers a critical alert.
 
 ## Related Documents
 
+- [Integrations](./INTEGRATIONS.md)
+- [Model Providers](./MODEL_PROVIDERS.md)
+- [Model Routing Policy](./MODEL_ROUTING_POLICY.md)
+- [Caching Strategy](./CACHING_STRATEGY.md)
+- [Cost Management](./COST_MANAGEMENT.md)
+- [Rate Limiting](./RATE_LIMITING.md)
+- [Secrets Management](./SECRETS_MANAGEMENT.md)
+- [Observability](./OBSERVABILITY.md)
 - [System Overview](./SYSTEM_OVERVIEW.md)
-- [Main Ai Kernel](./MAIN_AI_KERNEL.md)
-- [Prd](./PRD.md)
-- [Trd](./TRD.md)
-- [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)

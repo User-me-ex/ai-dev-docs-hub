@@ -1,88 +1,105 @@
-# Contributing
+# Contributing to AI Dev OS
 
-> Specification for the Contributing subsystem of the AI Development Operating System. This document is normative — implementations MUST satisfy every MUST clause below.
+Thank you for considering contributing to AI Dev OS. This document describes the processes and standards for all types of contributions.
 
-## Overview
+## How to Contribute
 
-Contributing is a first-class subsystem of the AI Development Operating System (AI Dev OS). It participates in the Kernel's intake → plan → route → execute → critique → merge → guard → deliver loop and communicates exclusively through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md). This document defines its purpose, contracts, invariants, and failure modes so that AI agents can reason about it without inspecting any implementation.
+- **Documentation**: Improve or expand guides, API references, tutorials, and code comments
+- **Code**: Fix bugs, add features, optimize performance, or improve test coverage
+- **Prompts**: Contribute system prompts, few-shot examples, and agent definitions that improve model output quality
+- **Bug reports**: File detailed, reproducible bug reports with logs and reproduction steps
+- **Feature requests**: Propose well-scoped enhancements that align with the project roadmap
+- **Community support**: Answer questions on Discord and Stack Overflow, triage issues, and review documentation
 
-## Goals
+## Development Setup
 
-- Provide an authoritative, unambiguous specification for this subsystem.
-- Define contracts, invariants, and acceptance criteria consumed by AI agents.
-- Stay small enough to review, large enough to remove ambiguity.
+### Prerequisites
+- Python 3.10+ or Node.js 18+ (depending on the component)
+- Rust toolchain (for native extensions and performance-critical modules)
+- Docker (required for running sandbox integration tests)
+- Git LFS (for large test fixtures)
 
-## Non-Goals
-
-- Implementation code — this repository is documentation-only (see [AI Coding Rules](./AI_CODING_RULES.md)).
-- Vendor-specific tuning beyond what [Model Providers](./MODEL_PROVIDERS.md) allows.
-- Duplicating contracts that belong to another subsystem; link instead.
-
-## Requirements
-
-- **MUST** be consumable by both humans and AI agents.
-- **MUST** publish every state change to the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md).
-- **MUST** pass every rule enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
-- **MUST** be observable through the metrics defined in [Observability](./OBSERVABILITY.md).
-- **SHOULD** degrade gracefully rather than fail hard.
-- **MAY** be extended via the [Plugin SDK](./PLUGIN_SDK.md) when the extension point is declared here.
-
-## Architecture
-
-```mermaid
-flowchart LR
-  IN([Input]) --> SUB[Contributing]
-  SUB --> CTX[(Shared Context Engine)]
-  SUB --> GUARD{Architecture Guardian}
-  GUARD -->|ok| OUT([Output])
-  GUARD -->|veto| SUB
+### Local Setup
+```bash
+git clone https://github.com/ai-dev-os/ai-dev-os.git
+cd ai-dev-os
+make install-dev       # Install all dependencies in development mode
+make build             # Build all components
+make test              # Run the full test suite to verify your setup
 ```
 
-The subsystem is stateless at the process boundary; all durable state lives in the [Persistent Memory](./PERSISTENT_MEMORY.md) tier and is projected on demand.
+### Running Tests
+```bash
+make test              # Run all test suites
+make test-unit         # Run unit tests only (fast, for quick iteration)
+make test-integration  # Run integration tests (requires Docker)
+make test-e2e          # Run end-to-end tests (requires Docker and a model)
+make test-coverage     # Run tests and generate coverage reports
+```
 
-## Interfaces
+## Pull Request Process
 
-- See related subsystems for the concrete API surface this document constrains.
+1. Fork the repository and create a feature branch from `main`
+2. Make your changes following the coding and documentation standards below
+3. Write or update tests to cover your changes — new code without tests will not be merged
+4. Run the full test suite and ensure it passes
+5. Commit using the required commit message format
+6. Push your branch and open a pull request against `main`. Fill out the PR template completely
+7. Address reviewer feedback. Keep the branch updated with `main`
+8. A maintainer will merge once all CI checks pass and at least one approval is received
 
-All interfaces follow the envelope defined in [Agent Communication](./AGENT_COMMUNICATION.md) and the error contract defined in [API Spec](./API_SPEC.md).
+## Coding Standards
 
-## Data Model
+- **Python**: Follow PEP 8. Type hints are required for all public APIs and recommended for internal ones. Run `ruff check .` before committing
+- **TypeScript/JavaScript**: Follow the project's ESLint and Prettier configuration. Prefer typed interfaces over `any`
+- **Rust**: Follow `rustfmt` conventions. Run `cargo clippy` before committing. Document all public items
+- **Shell scripts**: Use shellcheck. Prefer POSIX sh for maximum portability
+- All new code must include tests — unit tests for logic, integration tests for workflows
+- Keep functions focused on a single responsibility. Modules should have clear boundaries
+- Use descriptive variable names. Avoid abbreviations unless they are universally understood
 
-- Entities and fields are declared in the referenced subsystems and in [DATABASE](./DATABASE.md).
+## Documentation Standards
 
-Retention and encryption rules are inherited from [Data Retention](./DATA_RETENTION.md) and [Encryption](./ENCRYPTION.md).
+- All public APIs must include docstrings (Google style for Python, JSDoc for TypeScript, rustdoc for Rust)
+- Every user-facing feature must include CLI help text and a documentation page in `docs/`
+- Documentation is written in Markdown with a maximum line length of 100 characters
+- Code examples must be runnable. Add them to the test suite if feasible
+- Include screenshots or terminal recordings for UI or CLI changes
+- Cross-reference related documentation pages using relative Markdown links
 
-## Failure Modes
+## Commit Message Format
 
-- Every failure surfaces through the Shared Context Engine and the audit log.
-- Degradation is preferred over hard failure whenever safety permits.
+We follow [Conventional Commits](https://www.conventionalcommits.org/):
 
-Every failure emits a structured event on the Shared Context Engine and is recorded in the [Audit Log](./AUDIT_LOG.md).
+```
+<type>(<scope>): <description>
 
-## Security Considerations
+[optional body]
+[optional footer]
+```
 
-- Trust boundary: crosses only through signed envelopes (see [Security Model](./SECURITY_MODEL.md)).
-- Secrets are read from [Secrets Management](./SECRETS_MANAGEMENT.md); never inlined.
-- All external calls go through [Model Providers](./MODEL_PROVIDERS.md) or the [Plugin SDK](./PLUGIN_SDK.md) — no ad-hoc network access.
+Types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `chore`, `ci`, `revert`
 
-## Observability
+Scope is the component or module being changed (e.g., `agent`, `cli`, `orchestrator`, `docs`).
 
-- Metrics, traces, and logs conform to [Observability](./OBSERVABILITY.md), [Tracing](./TRACING.md), and [Logging](./LOGGING.md).
-- Every run carries a `correlation_id` propagated from the Kernel.
+Examples:
+- `feat(agent): add retry logic for tool execution failures`
+- `fix(cli): handle SIGTERM during long-running tasks`
+- `docs: update installation instructions for Windows ARM64`
 
-## Acceptance Criteria
+The description must be lowercase, imperative, and 72 characters or fewer.
 
-- The contracts above are testable via the [Eval Harness](./EVAL_HARNESS.md).
-- A change to this document requires a matching update to any dependent doc listed in *Related Documents*.
+## Review Process
 
-## Open Questions
-
-- _Track open questions as ADRs under [templates/ADR](../templates/ADR.md)._
+- All PRs require at least one approval from a core maintainer
+- Maintainers review within 48 hours on average during business days
+- PRs introducing breaking changes must include a `BREAKING CHANGE` footer in the commit and a migration guide
+- Large changes should be preceded by a GitHub Discussion or RFC
+- Automated checks (lint, test, build, security scan) must pass before human review begins
 
 ## Related Documents
 
-- [System Overview](./SYSTEM_OVERVIEW.md)
-- [Main Ai Kernel](./MAIN_AI_KERNEL.md)
-- [Prd](./PRD.md)
-- [Trd](./TRD.md)
-- [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)
+- [Local Development Guide](DEVELOPMENT.md)
+- [Code of Conduct](CODE_OF_CONDUCT.md)
+- [Testing Strategy](TESTING.md)
+- [Architecture Overview](ARCHITECTURE.md)

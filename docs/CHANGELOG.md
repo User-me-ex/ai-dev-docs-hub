@@ -1,88 +1,209 @@
 # Changelog
 
-> Specification for the Changelog subsystem of the AI Development Operating System. This document is normative — implementations MUST satisfy every MUST clause below.
+> All notable changes to AI Dev OS are documented here. This file follows the [Keep a Changelog](https://keepachangelog.com/) format and adheres to the versioning scheme defined in [Versioning.md](./VERSIONING.md).
 
-## Overview
+## Categories
 
-Changelog is a first-class subsystem of the AI Development Operating System (AI Dev OS). It participates in the Kernel's intake → plan → route → execute → critique → merge → guard → deliver loop and communicates exclusively through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md). This document defines its purpose, contracts, invariants, and failure modes so that AI agents can reason about it without inspecting any implementation.
+Entries are organized under the following headings:
 
-## Goals
+- **Added** — new features, subsystems, documents, or commands.
+- **Changed** — modifications to existing functionality, including non-breaking contract changes.
+- **Deprecated** — features that are still supported but should not be used in new work.
+- **Removed** — features that have been deleted.
+- **Fixed** — bug fixes.
+- **Security** — vulnerability fixes.
 
-- Provide an authoritative, unambiguous specification for this subsystem.
-- Define contracts, invariants, and acceptance criteria consumed by AI agents.
-- Stay small enough to review, large enough to remove ambiguity.
+## Version Format
 
-## Non-Goals
+`[MAJOR.MINOR.PATCH]` — `YYYY-MM-DD`
 
-- Implementation code — this repository is documentation-only (see [AI Coding Rules](./AI_CODING_RULES.md)).
-- Vendor-specific tuning beyond what [Model Providers](./MODEL_PROVIDERS.md) allows.
-- Duplicating contracts that belong to another subsystem; link instead.
+Pre-release versions are listed as `[MAJOR.MINOR.PATCH-rc.N]` and are excluded from the "latest" stability guarantee.
 
-## Requirements
+---
 
-- **MUST** be consumable by both humans and AI agents.
-- **MUST** publish every state change to the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md).
-- **MUST** pass every rule enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
-- **MUST** be observable through the metrics defined in [Observability](./OBSERVABILITY.md).
-- **SHOULD** degrade gracefully rather than fail hard.
-- **MAY** be extended via the [Plugin SDK](./PLUGIN_SDK.md) when the extension point is declared here.
+## [Unreleased]
 
-## Architecture
+### Added
 
-```mermaid
-flowchart LR
-  IN([Input]) --> SUB[Changelog]
-  SUB --> CTX[(Shared Context Engine)]
-  SUB --> GUARD{Architecture Guardian}
-  GUARD -->|ok| OUT([Output])
-  GUARD -->|veto| SUB
-```
+- Phase 1 implementation in progress: Kernel skeleton, Nine Router adapters, CLI MVP.
+- Phase 2 implementation in progress: Persistent Memory, Embeddings, Vector Store.
 
-The subsystem is stateless at the process boundary; all durable state lives in the [Persistent Memory](./PERSISTENT_MEMORY.md) tier and is projected on demand.
+### Changed
 
-## Interfaces
+- _(No changes yet.)_
 
-- See related subsystems for the concrete API surface this document constrains.
+### Deprecated
 
-All interfaces follow the envelope defined in [Agent Communication](./AGENT_COMMUNICATION.md) and the error contract defined in [API Spec](./API_SPEC.md).
+- _(No deprecations yet.)_
 
-## Data Model
+### Removed
 
-- Entities and fields are declared in the referenced subsystems and in [DATABASE](./DATABASE.md).
+- _(No removals yet.)_
 
-Retention and encryption rules are inherited from [Data Retention](./DATA_RETENTION.md) and [Encryption](./ENCRYPTION.md).
+### Fixed
 
-## Failure Modes
+- _(No fixes yet.)_
 
-- Every failure surfaces through the Shared Context Engine and the audit log.
-- Degradation is preferred over hard failure whenever safety permits.
+### Security
 
-Every failure emits a structured event on the Shared Context Engine and is recorded in the [Audit Log](./AUDIT_LOG.md).
+- _(No security fixes yet.)_
 
-## Security Considerations
+---
 
-- Trust boundary: crosses only through signed envelopes (see [Security Model](./SECURITY_MODEL.md)).
-- Secrets are read from [Secrets Management](./SECRETS_MANAGEMENT.md); never inlined.
-- All external calls go through [Model Providers](./MODEL_PROVIDERS.md) or the [Plugin SDK](./PLUGIN_SDK.md) — no ad-hoc network access.
+## [0.1.0] — 2025-07-22
 
-## Observability
+### Added
 
-- Metrics, traces, and logs conform to [Observability](./OBSERVABILITY.md), [Tracing](./TRACING.md), and [Logging](./LOGGING.md).
-- Every run carries a `correlation_id` propagated from the Kernel.
+- **Documentation bootstrap**: 125+ specification documents under `docs/` covering every subsystem from Kernel to Plugin SDK. Each document follows a standardized section skeleton with Mermaid diagrams, acceptance criteria, and cross-references.
+- **Spec set**: Complete PRD, TRD, API Spec, System Overview, Security Model, and subsystem specifications for all Phase 1–7 deliverables.
+- **Master Prompt v0**: Initial draft of `MASTER_PROMPT` with role definitions for Kernel, Builder, Planner, Critic, Researcher, and Router.
+- **Nine Router spec**: Complete model discovery contract with canonical schema, provider endpoint table, role assignment protocol, and fallback strategy.
+- **AI Coding Rules v1.0**: Coding standards for the documentation repository including the `no-code-in-doc-repo` rule and section-skeleton Guardian rule.
+- **Knowledge bases**: All four KB tier specs — `GLOBAL_KB`, `MAIN_KB`, `GROUP_KB`, `INDIVIDUAL_KB` — with tier resolution rules and retention policies.
+- **Template set**: ADR, RFC, PRD, TRD, AgentSpec, PromptSpec, and SubsystemSpec templates under `templates/`.
+- **Prompts**: All prompt files shipped — `SYSTEM_PROMPT`, `KERNEL_PROMPT`, `PLANNING_PROMPT`, `ROUTER_PROMPT`, `CRITIC_PROMPT`, `RESEARCH_PROMPT`, `AGENT_PROMPT`, `MASTER_PROMPT`.
+- **Mermaid diagrams**: Architecture diagrams for all major subsystems including Kernel loop, Nine Router routing, Shared Context Engine, Merge Manager, and Knowledge System.
+- **CLI spec**: Documented command interface for `aidevos init`, `aidevos doctor`, `aidevos run`, `aidevos models`, `aidevos router`, and `aidevos plugins`.
+- **Release infrastructure**: Versioning, Release Process, and Changelog documents established.
 
-## Acceptance Criteria
+### Changed
 
-- The contracts above are testable via the [Eval Harness](./EVAL_HARNESS.md).
-- A change to this document requires a matching update to any dependent doc listed in *Related Documents*.
+- _(Initial release — no prior version to compare against.)_
 
-## Open Questions
+### Deprecated
 
-- _Track open questions as ADRs under [templates/ADR](../templates/ADR.md)._
+- _(Initial release.)_
+
+### Removed
+
+- _(Initial release.)_
+
+### Fixed
+
+- _(Initial release.)_
+
+### Security
+
+- _(Initial release.)_
+
+---
+
+## [0.2.0] — _Planned 2025-08_
+
+> Release corresponding to Phase 1 — Kernel & Router MVP completion.
+
+### Added (forecast)
+
+- Main AI Kernel skeleton with intake → plan → route → execute → deliver loop.
+- Nine Router: OpenAI, Anthropic, and Ollama adapters with model discovery.
+- CLI MVP: `aidevos init`, `aidevos doctor`, `aidevos run <goal>`, `aidevos models list`, `aidevos router assign`.
+- Shared Context Engine: SQLite backend with publish/subscribe/snapshot.
+- Audit Log: append-only structured log backed by SQLite.
+- Observability: Prometheus metrics endpoint, structured JSON logs, OpenTelemetry traces.
+
+---
+
+## [0.3.0] — _Planned 2025-09_
+
+> Release corresponding to Phase 2 — Context Engine & Persistent Memory.
+
+### Added (forecast)
+
+- Persistent Memory: relational (SQLite) + vector (usearch) tiers.
+- Embeddings: local embedding via Ollama with async backfill queue.
+- Vector Store: embedded usearch index with ANN search.
+- Agent Memory: per-agent working memory.
+- Kernel replay: `kernel.replay(run_id)` for run reconstruction.
+
+---
+
+## [0.4.0] — _Planned 2025-10_
+
+> Release corresponding to Phase 3 — AI Groups & Dynamic Workers.
+
+### Added (forecast)
+
+- AI Group System with spawn, heartbeat, circuit breaker, elastic autoscaler.
+- Dynamic Workers with full WorkerSpec execution loop and tool dispatch.
+- Task Graph with parallel execution and dependency resolution.
+- Planning Engine with goal-to-TaskGraph decomposition.
+- Critic role with verdict emission and retry loop.
+- Job Scheduler with cron-based scheduling.
+- Built-in groups: `code-builder`, `researcher`, `guardian`.
+
+---
+
+## [0.5.0] — _Planned 2025-11_
+
+> Release corresponding to Phase 4 — Knowledge System & Research Engine.
+
+### Added (forecast)
+
+- Knowledge System: four-tier KB with layered query resolution.
+- Obsidian Graph Engine with incremental updates and semantic queries.
+- RAG Pipeline: hybrid BM25 + ANN retrieval with context assembly.
+- Research Engine: fetch → parse → dedup → diff → provenance → write pipeline.
+- Web Intelligence: Playwright-based browser automation.
+- Internet Search: pluggable backend (SearXNG, Brave, Google).
+- GitHub Analysis: repo structure, issue, PR, and release analysis.
+
+---
+
+## [0.6.0] — _Planned 2025-12_
+
+> Release corresponding to Phase 5 — Merge Manager, Guardian & Impact Analysis.
+
+### Added (forecast)
+
+- Merge Manager: three-way merge with Markdown/YAML/JSON awareness.
+- Architecture Guardian: rule engine with built-in rules and hot-reload.
+- Impact Analysis: graph traversal with risk scoring and blast radius.
+- Custom Guardian rule authoring in `~/.aidevos/rules/`.
+
+---
+
+## [0.7.0] — _Planned 2026-01_
+
+> Release corresponding to Phase 6 — Voice System, Plugin SDK & UX.
+
+### Added (forecast)
+
+- Voice System: Whisper STT, Piper TTS, VAD, wake-word, interruption handling.
+- Plugin SDK: manifest format, WASM/subprocess execution, consent flow.
+- MCP full implementation: client and server with custom resources.
+- Desktop shell (Electron or Tauri) and Web shell (React).
+- API Gateway: REST + WebSocket with rate limiting and auth.
+
+---
+
+## [1.0.0] — _Planned 2026-02_
+
+> Release corresponding to Phase 7 — General Availability.
+
+### Added (forecast)
+
+- All reliability targets met (p99 Kernel < 5 s, p99 SCE < 5 ms, etc.).
+- Full benchmark suite published.
+- Security audit completed and findings addressed.
+- Multi-tenant deployment documented.
+- Migration guide from pre-v1 snapshots.
+- API stability guarantee: all v1.0 API surfaces are semver-stable.
+
+---
+
+## Changelog Maintenance Policy
+
+1. Every PR that adds, changes, or removes user-facing behavior MUST include a corresponding changelog entry.
+2. Entries are added under the `[Unreleased]` section during development.
+3. At release time, `[Unreleased]` is renamed to the version number, a new `[Unreleased]` section is created, and the release date is added.
+4. Entries SHOULD reference relevant issue or PR numbers in parentheses.
+5. Entries SHOULD link to the relevant documentation for new or changed features.
+6. The changelog is maintained by hand — automated generation tools (e.g., `git log` scraping) are not used. This ensures each entry is written for human readers.
 
 ## Related Documents
 
-- [System Overview](./SYSTEM_OVERVIEW.md)
-- [Main Ai Kernel](./MAIN_AI_KERNEL.md)
-- [Prd](./PRD.md)
-- [Trd](./TRD.md)
-- [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)
+- [Versioning](./VERSIONING.md)
+- [Release Process](./RELEASE_PROCESS.md)
+- [Implementation Roadmap](./IMPLEMENTATION_ROADMAP.md)
+- [Migration Guide](./MIGRATION_GUIDE.md)
+- [Upgrade Notes](./UPGRADE_NOTES.md)

@@ -1,88 +1,129 @@
 # Installation
 
-> Specification for the Installation subsystem of the AI Development Operating System. This document is normative — implementations MUST satisfy every MUST clause below.
+> Detailed installation guide for AI Dev OS across all supported platforms.
 
 ## Overview
 
-Installation is a first-class subsystem of the AI Development Operating System (AI Dev OS). It participates in the Kernel's intake → plan → route → execute → critique → merge → guard → deliver loop and communicates exclusively through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md). This document defines its purpose, contracts, invariants, and failure modes so that AI agents can reason about it without inspecting any implementation.
+AI Dev OS ships as a single self-contained binary. Choose the method that best fits your workflow — pre-built binary, Homebrew, npm, Docker, or building from source. All methods produce the same `aidevos` binary.
 
-## Goals
+## System Requirements
 
-- Provide an authoritative, unambiguous specification for this subsystem.
-- Define contracts, invariants, and acceptance criteria consumed by AI agents.
-- Stay small enough to review, large enough to remove ambiguity.
+| Resource | Minimum | Recommended |
+|----------|---------|-------------|
+| **OS** | macOS 13+, Windows 10 (WSL2), Linux kernel 5.4+ | Same |
+| **CPU** | 2 cores, x86_64 or aarch64 | 4+ cores |
+| **RAM** | 2 GB | 8 GB+ |
+| **Disk** | 150 MB | 10 GB+ |
+| **GPU** | None required | CUDA/MPS for local inference |
+| **Ollama** | Optional (local models) | v0.5+ |
 
-## Non-Goals
+## Installation Methods
 
-- Implementation code — this repository is documentation-only (see [AI Coding Rules](./AI_CODING_RULES.md)).
-- Vendor-specific tuning beyond what [Model Providers](./MODEL_PROVIDERS.md) allows.
-- Duplicating contracts that belong to another subsystem; link instead.
+| Method | Command | Best for |
+|--------|---------|----------|
+| **Binary download** | Download from GitHub releases | All platforms, CI/CD |
+| **Homebrew** | `brew install aidevos/tap/aidevos` | macOS & Linux |
+| **npm** | `npm install -g @aidevos/cli` | Node.js ecosystems |
+| **Docker** | `docker pull ghcr.io/aidevos/aidevos` | Containerized environments |
+| **Build from source** | `git clone` + `bun run build` | Contributors |
 
-## Requirements
+### Binary Download
 
-- **MUST** be consumable by both humans and AI agents.
-- **MUST** publish every state change to the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md).
-- **MUST** pass every rule enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
-- **MUST** be observable through the metrics defined in [Observability](./OBSERVABILITY.md).
-- **SHOULD** degrade gracefully rather than fail hard.
-- **MAY** be extended via the [Plugin SDK](./PLUGIN_SDK.md) when the extension point is declared here.
-
-## Architecture
-
-```mermaid
-flowchart LR
-  IN([Input]) --> SUB[Installation]
-  SUB --> CTX[(Shared Context Engine)]
-  SUB --> GUARD{Architecture Guardian}
-  GUARD -->|ok| OUT([Output])
-  GUARD -->|veto| SUB
+```bash
+curl -LO https://github.com/aidevos/aidevos/releases/latest/download/aidevos_darwin_arm64.tar.gz
+tar -xzf aidevos_darwin_arm64.tar.gz
+sudo mv aidevos /usr/local/bin/
 ```
 
-The subsystem is stateless at the process boundary; all durable state lives in the [Persistent Memory](./PERSISTENT_MEMORY.md) tier and is projected on demand.
+### Homebrew
 
-## Interfaces
+```bash
+brew install aidevos/tap/aidevos
+```
 
-- See related subsystems for the concrete API surface this document constrains.
+Upgrade with: `brew upgrade aidevos/tap/aidevos`
 
-All interfaces follow the envelope defined in [Agent Communication](./AGENT_COMMUNICATION.md) and the error contract defined in [API Spec](./API_SPEC.md).
+### npm
 
-## Data Model
+```bash
+npm install -g @aidevos/cli
+```
 
-- Entities and fields are declared in the referenced subsystems and in [DATABASE](./DATABASE.md).
+The npm package is a thin wrapper that downloads the correct platform binary on install.
 
-Retention and encryption rules are inherited from [Data Retention](./DATA_RETENTION.md) and [Encryption](./ENCRYPTION.md).
+### Docker
 
-## Failure Modes
+```bash
+docker pull ghcr.io/aidevos/aidevos:latest
+docker run --rm -v ~/.aidevos:/root/.aidevos ghcr.io/aidevos/aidevos run "hello world"
+docker run -d -p 8374:8374 -v ~/.aidevos:/root/.aidevos ghcr.io/aidevos/aidevos server start
+```
 
-- Every failure surfaces through the Shared Context Engine and the audit log.
-- Degradation is preferred over hard failure whenever safety permits.
+### Build from Source
 
-Every failure emits a structured event on the Shared Context Engine and is recorded in the [Audit Log](./AUDIT_LOG.md).
+Prerequisites: Bun 1.2+, Node.js 20+, TypeScript 5.5+
 
-## Security Considerations
+```bash
+git clone https://github.com/aidevos/aidevos.git
+cd aidevos
+bun install
+bun run build:binary
+```
 
-- Trust boundary: crosses only through signed envelopes (see [Security Model](./SECURITY_MODEL.md)).
-- Secrets are read from [Secrets Management](./SECRETS_MANAGEMENT.md); never inlined.
-- All external calls go through [Model Providers](./MODEL_PROVIDERS.md) or the [Plugin SDK](./PLUGIN_SDK.md) — no ad-hoc network access.
+The compiled binary is written to `dist/aidevos`. See [Local Dev](./LOCAL_DEV.md) for details.
 
-## Observability
+## Platform-Specific Notes
 
-- Metrics, traces, and logs conform to [Observability](./OBSERVABILITY.md), [Tracing](./TRACING.md), and [Logging](./LOGGING.md).
-- Every run carries a `correlation_id` propagated from the Kernel.
+**macOS Apple Silicon**: Binary compiled for `arm64`. If code signing warnings appear, run `xattr -d com.apple.quarantine /usr/local/bin/aidevos`.
 
-## Acceptance Criteria
+**macOS Intel**: Binary compiled for `amd64`. Homebrew installs to `/usr/local/bin` by default.
 
-- The contracts above are testable via the [Eval Harness](./EVAL_HARNESS.md).
-- A change to this document requires a matching update to any dependent doc listed in *Related Documents*.
+**Windows (WSL2)**: Install [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install) with an Ubuntu distribution, then follow the Linux instructions. WSL2 is recommended over native Windows for full model provider compatibility.
 
-## Open Questions
+**Linux**: Pre-built binaries for `x86_64` and `aarch64`. glibc 2.28+ required (Ubuntu 20.04+, Debian 11+, Fedora 36+). System-wide: `sudo mv aidevos /usr/local/bin/`. Per-user: `mv aidevos ~/.local/bin/`.
 
-- _Track open questions as ADRs under [templates/ADR](../templates/ADR.md)._
+## Verifying Installation
+
+```bash
+aidevos doctor
+```
+
+A passing output:
+
+```
+✔ Binary version: 1.0.0 (commit abc1234)
+✔ Config: ~/.aidevos/config.toml (valid)
+✔ Ollama endpoint: http://localhost:11434 (reachable)
+✔ Ollama model: llama3.2:3b (available)
+✔ Disk space: 42 GB free
+```
+
+For verbose output: `aidevos doctor --verbose`
+
+## Uninstallation
+
+```bash
+# Homebrew
+brew uninstall aidevos/tap/aidevos
+
+# Manual binary
+rm /usr/local/bin/aidevos
+
+# npm
+npm uninstall -g @aidevos/cli
+
+# Docker
+docker rmi ghcr.io/aidevos/aidevos
+
+# Remove all user data (back up first)
+rm -rf ~/.aidevos
+```
 
 ## Related Documents
 
-- [System Overview](./SYSTEM_OVERVIEW.md)
-- [Main Ai Kernel](./MAIN_AI_KERNEL.md)
-- [Prd](./PRD.md)
-- [Trd](./TRD.md)
-- [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)
+- [Getting Started](./GETTING_STARTED.md) — first-run walkthrough
+- [Local Dev](./LOCAL_DEV.md) — contributing to AI Dev OS
+- [Deployment](./DEPLOYMENT.md) — production/server deployment
+- [Configuration](./CONFIGURATION.md) — config reference
+- [CLI](./CLI.md) — command reference
+- [FAQ](./FAQ.md) — frequently asked questions

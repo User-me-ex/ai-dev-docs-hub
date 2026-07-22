@@ -1,88 +1,100 @@
 # Variable Registry
 
-> Specification for the Variable Registry subsystem of the AI Development Operating System. This document is normative — implementations MUST satisfy every MUST clause below.
+**Component ID:** core.variable-registry  
+**Status:** Active  
+**Version:** 1.0.0  
+**Last Updated:** 2026-07-22
+
+---
 
 ## Overview
 
-Variable Registry is a first-class subsystem of the AI Development Operating System (AI Dev OS). It participates in the Kernel's intake → plan → route → execute → critique → merge → guard → deliver loop and communicates exclusively through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md). This document defines its purpose, contracts, invariants, and failure modes so that AI agents can reason about it without inspecting any implementation.
+The Variable Registry maintains a complete inventory of environment variables and configuration parameters used across the system. Every variable — whether consumed at build time, startup, or runtime — must be declared here to be recognized by the configuration loader.
 
-## Goals
+This registry ensures that no configuration key is used before it is defined, that deprecations are visible across the codebase, and that secret-bearing variables are never logged or leaked. It is the single source of truth for the Configuration subsystem and the Environment Variables initialization pipeline.
 
-- Provide an authoritative, unambiguous specification for this subsystem.
-- Define contracts, invariants, and acceptance criteria consumed by AI agents.
-- Stay small enough to review, large enough to remove ambiguity.
+---
 
-## Non-Goals
+## VariableDefinition Schema
 
-- Implementation code — this repository is documentation-only (see [AI Coding Rules](./AI_CODING_RULES.md)).
-- Vendor-specific tuning beyond what [Model Providers](./MODEL_PROVIDERS.md) allows.
-- Duplicating contracts that belong to another subsystem; link instead.
-
-## Requirements
-
-- **MUST** be consumable by both humans and AI agents.
-- **MUST** publish every state change to the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md).
-- **MUST** pass every rule enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
-- **MUST** be observable through the metrics defined in [Observability](./OBSERVABILITY.md).
-- **SHOULD** degrade gracefully rather than fail hard.
-- **MAY** be extended via the [Plugin SDK](./PLUGIN_SDK.md) when the extension point is declared here.
-
-## Architecture
-
-```mermaid
-flowchart LR
-  IN([Input]) --> SUB[Variable Registry]
-  SUB --> CTX[(Shared Context Engine)]
-  SUB --> GUARD{Architecture Guardian}
-  GUARD -->|ok| OUT([Output])
-  GUARD -->|veto| SUB
+```typescript
+interface VariableDefinition {
+  name: string;
+  type: "string" | "number" | "boolean" | "path" | "json" | "duration" | "enum";
+  default?: string | number | boolean;
+  description: string;
+  scope: "build" | "startup" | "runtime" | "all";
+  secret: boolean;
+  required: boolean;
+  enum_values?: string[];
+  deprecated?: boolean;
+  replaced_by?: string;
+  source: "env" | "config_file" | "both";
+}
 ```
 
-The subsystem is stateless at the process boundary; all durable state lives in the [Persistent Memory](./PERSISTENT_MEMORY.md) tier and is projected on demand.
+| Field          | Type                                      | Description                                    |
+|----------------|-------------------------------------------|------------------------------------------------|
+| `name`         | `string`                                  | Uppercase snake-case variable name             |
+| `type`         | `"string" \| "number" \| "boolean" \| "path" \| "json" \| "duration" \| "enum"` | Value type |
+| `default`      | `string \| number \| boolean`?            | Default if not set                             |
+| `description`  | `string`                                  | Purpose and usage notes                        |
+| `scope`        | `"build" \| "startup" \| "runtime" \| "all"` | When the variable is loaded               |
+| `secret`       | `boolean`                                 | If true, never log, dump, or expose in errors  |
+| `required`     | `boolean`                                 | Startup must fail if unset                     |
+| `enum_values`  | `string[]`?                               | Allowed values for `type: "enum"`              |
+| `deprecated`   | `boolean`?                                | Scheduled for removal                          |
+| `replaced_by`  | `string`?                                 | Use this variable instead                      |
+| `source`       | `"env" \| "config_file" \| "both"`        | Where the value is resolved from               |
 
-## Interfaces
+---
 
-- See related subsystems for the concrete API surface this document constrains.
+## Standard Environment Variables
 
-All interfaces follow the envelope defined in [Agent Communication](./AGENT_COMMUNICATION.md) and the error contract defined in [API Spec](./API_SPEC.md).
+| Variable                  | Type      | Default    | Secret | Required | Scope     | Description                              |
+|---------------------------|-----------|------------|--------|----------|-----------|------------------------------------------|
+| `AIDEVOS_HOME`            | path      | `~/.aidevos` | false  | true     | startup   | Root directory for all runtime data      |
+| `AIDEVOS_CONFIG`          | path      | `$AIDEVOS_HOME/config` | false | false | startup | Configuration file directory       |
+| `AIDEVOS_LOG_LEVEL`       | enum      | `info`     | false  | false    | startup   | Log verbosity: `debug`, `info`, `warn`, `error` |
+| `AIDEVOS_LOG_DIR`         | path      | `$AIDEVOS_HOME/logs` | false | false | startup   | Log file output directory           |
+| `AIDEVOS_PLUGIN_DIR`      | path      | `$AIDEVOS_HOME/plugins` | false | false | startup | Plugin installation directory       |
+| `AIDEVOS_TEMP_DIR`        | path      | `$AIDEVOS_HOME/tmp` | false   | false    | runtime   | Temporary file storage                   |
+| `AIDEVOS_CACHE_DIR`       | path      | `$AIDEVOS_HOME/cache` | false  | false    | runtime   | Persistent cache storage                 |
+| `AIDEVOS_MAX_TOKENS`      | number    | `4096`     | false  | false    | runtime   | Maximum LLM tokens per request           |
+| `AIDEVOS_TIMEOUT_SECS`    | number    | `30`       | false  | false    | runtime   | Default operation timeout                |
+| `AIDEVOS_SECRET_KEY`      | string    | —          | true   | true     | startup   | Master encryption key                    |
+| `AIDEVOS_API_KEY`         | string    | —          | true   | false    | runtime   | External API authentication key          |
+| `AIDEVOS_ENABLE_METRICS`  | boolean   | `true`     | false  | false    | runtime   | Enable Prometheus metrics endpoint       |
+| `AIDEVOS_METRICS_PORT`    | number    | `9090`     | false  | false    | runtime   | Metrics server listen port               |
+| `AIDEVOS_MCP_CONFIG`      | json      | `{}`       | false  | false    | startup   | MCP server connection configuration      |
+| `AIDEVOS_DEV_MODE`        | boolean   | `false`    | false  | false    | startup   | Development-mode features and verbose logging |
 
-## Data Model
+---
 
-- Entities and fields are declared in the referenced subsystems and in [DATABASE](./DATABASE.md).
+## Integration with Configuration
 
-Retention and encryption rules are inherited from [Data Retention](./DATA_RETENTION.md) and [Encryption](./ENCRYPTION.md).
+The Configuration subsystem uses the Variable Registry as its schema for loading and validating config:
 
-## Failure Modes
+1. **Load** — Config loader iterates all `source: "env"` and `source: "both"` variables, reads them from environment, and applies defaults.
+2. **Validate** — Each loaded value is type-checked against the variable's `type` field. Enum values are checked against `enum_values`. Required variables that are unset and lack a default raise `ConfigValidationError`.
+3. **Coerce** — Values are cast to their declared types (e.g. `"true"` → `true` for booleans, `"30"` → `30` for numbers).
+4. **Mask** — Variables with `secret: true` have their values replaced with `"****"` in all logs, error messages, and debug dumps.
 
-- Every failure surfaces through the Shared Context Engine and the audit log.
-- Degradation is preferred over hard failure whenever safety permits.
+---
 
-Every failure emits a structured event on the Shared Context Engine and is recorded in the [Audit Log](./AUDIT_LOG.md).
+## Validation Rules
 
-## Security Considerations
+- **Unknown variables** — Loading an environment variable not present in the registry emits a warning but does not fail. This allows forward-compatibility with external tooling.
+- **Type mismatch** — If a value cannot be coerced to its declared type, the loader raises `TypeCoercionError` with the variable name and expected type.
+- **Missing required** — Startup aborts if a required variable has no value and no default.
+- **Deprecated usage** — Reading a variable marked `deprecated: true` emits a deprecation warning with the `replaced_by` target.
 
-- Trust boundary: crosses only through signed envelopes (see [Security Model](./SECURITY_MODEL.md)).
-- Secrets are read from [Secrets Management](./SECRETS_MANAGEMENT.md); never inlined.
-- All external calls go through [Model Providers](./MODEL_PROVIDERS.md) or the [Plugin SDK](./PLUGIN_SDK.md) — no ad-hoc network access.
-
-## Observability
-
-- Metrics, traces, and logs conform to [Observability](./OBSERVABILITY.md), [Tracing](./TRACING.md), and [Logging](./LOGGING.md).
-- Every run carries a `correlation_id` propagated from the Kernel.
-
-## Acceptance Criteria
-
-- The contracts above are testable via the [Eval Harness](./EVAL_HARNESS.md).
-- A change to this document requires a matching update to any dependent doc listed in *Related Documents*.
-
-## Open Questions
-
-- _Track open questions as ADRs under [templates/ADR](../templates/ADR.md)._
+---
 
 ## Related Documents
 
-- [System Overview](./SYSTEM_OVERVIEW.md)
-- [Main Ai Kernel](./MAIN_AI_KERNEL.md)
-- [Prd](./PRD.md)
-- [Trd](./TRD.md)
-- [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)
+- SYMBOL_REGISTRY.md — General-purpose symbol tracking
+- FUNCTION_REGISTRY.md — Function-specific registry layer
+- CLASS_REGISTRY.md — Class/type definition catalog
+- CONFIGURATION.md — Configuration loading and resolution
+- ARCHITECTURE_GUARDIAN.md — System-wide architectural enforcement

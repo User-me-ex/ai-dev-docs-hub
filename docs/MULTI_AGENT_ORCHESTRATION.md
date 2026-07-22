@@ -1,88 +1,187 @@
-# Multi Agent Orchestration
+# Multi-Agent Orchestration
 
-> Specification for the Multi Agent Orchestration subsystem of the AI Development Operating System. This document is normative — implementations MUST satisfy every MUST clause below.
+> **Domain:** Multi-Agent Coordination
+> **Applies to:** Kernel, AI Group System, SCE, Merge Manager
+> **Last updated:** 2026-07-22
 
 ## Overview
 
-Multi Agent Orchestration is a first-class subsystem of the AI Development Operating System (AI Dev OS). It participates in the Kernel's intake → plan → route → execute → critique → merge → guard → deliver loop and communicates exclusively through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md). This document defines its purpose, contracts, invariants, and failure modes so that AI agents can reason about it without inspecting any implementation.
-
-## Goals
-
-- Provide an authoritative, unambiguous specification for this subsystem.
-- Define contracts, invariants, and acceptance criteria consumed by AI agents.
-- Stay small enough to review, large enough to remove ambiguity.
-
-## Non-Goals
-
-- Implementation code — this repository is documentation-only (see [AI Coding Rules](./AI_CODING_RULES.md)).
-- Vendor-specific tuning beyond what [Model Providers](./MODEL_PROVIDERS.md) allows.
-- Duplicating contracts that belong to another subsystem; link instead.
-
-## Requirements
-
-- **MUST** be consumable by both humans and AI agents.
-- **MUST** publish every state change to the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md).
-- **MUST** pass every rule enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
-- **MUST** be observable through the metrics defined in [Observability](./OBSERVABILITY.md).
-- **SHOULD** degrade gracefully rather than fail hard.
-- **MAY** be extended via the [Plugin SDK](./PLUGIN_SDK.md) when the extension point is declared here.
-
-## Architecture
+Multiple agents can be assigned to a single run, coordinating through a combination of hierarchical control, peer-to-peer communication, and shared state. The orchestration system ensures that agents can work in parallel without conflicts, share intermediate results, and synchronize at defined barriers.
 
 ```mermaid
-flowchart LR
-  IN([Input]) --> SUB[Multi Agent Orchestration]
-  SUB --> CTX[(Shared Context Engine)]
-  SUB --> GUARD{Architecture Guardian}
-  GUARD -->|ok| OUT([Output])
-  GUARD -->|veto| SUB
+flowchart TB
+    subgraph KERNEL["Kernel"]
+        K[Main Loop]
+    end
+
+    subgraph HIER["Hierarchical (default)"]
+        PL[Planner Agent]
+        W1[Worker 1]
+        W2[Worker 2]
+        W3[Worker 3]
+        PL -->|decompose task| W1
+        PL -->|decompose task| W2
+        PL -->|decompose task| W3
+        W1 -->|results| PL
+        W2 -->|results| PL
+        W3 -->|results| PL
+    end
+
+    subgraph PEER["Peer (sibling)"]
+        A[Agent Alpha]
+        B[Agent Beta]
+        C[Agent Gamma]
+        A <-->|SCE topic: coordination| B
+        B <-->|SCE topic: coordination| C
+        A <-->|SCE topic: coordination| C
+    end
+
+    subgraph PARENT["Parent-Child (subgroup)"]
+        G[Group Lead]
+        SG1[Subgroup 1]
+        SG2[Subgroup 2]
+        G -->|spawn| SG1
+        G -->|spawn| SG2
+        SG1 -->|merge| G
+        SG2 -->|merge| G
+    end
+
+    K -->|dispatch| PL
+    K -->|dispatch| A
+    K -->|dispatch| G
 ```
 
-The subsystem is stateless at the process boundary; all durable state lives in the [Persistent Memory](./PERSISTENT_MEMORY.md) tier and is projected on demand.
+## Coordination Patterns
+
+### Hierarchical (Kernel → Planner → Workers)
+
+The default pattern. A **Planner agent** receives a high-level task from the Kernel, decomposes it into sub-tasks, and dispatches each sub-task to a **Worker agent**. Workers operate independently and report back to the Planner, which merges results and returns the final output to the Kernel.
+
+- **Use case:** Complex coding tasks (e.g., "implement feature X across 5 files").
+- **Concurrency:** All workers run in parallel.
+- **Failure handling:** If a worker fails, the Planner can re-dispatch the sub-task to another worker or adjust the plan.
+
+### Peer (Sibling Agents)
+
+Agents at the same level communicate directly via the SCE event bus. Each agent subscribes to a shared coordination topic and publishes status updates, intermediate results, and requests for input.
+
+- **Use case:** Collaborative debugging (e.g., "agent-alpha investigates the frontend, agent-beta investigates the backend, they share findings").
+- **Concurrency:** All agents run in parallel, communicating asynchronously.
+- **Failure handling:** One agent failing does not block others if tasks are independent. Dependent agents wait for a timeout and proceed with partial information.
+
+### Parent-Child (Group Spawning Subgroups)
+
+A **Group Lead** agent spawns child subgroups, each of which has its own internal hierarchy. Subgroups work in parallel and merge their results back to the Group Lead.
+
+- **Use case:** Large refactors where each module is handled by its own team of agents.
+- **Concurrency:** Subgroups run in parallel; within each subgroup, the pattern can be hierarchical.
+- **Failure handling:** Subgroup failure is isolated to that subgroup. The Group Lead can redistribute the work.
+
+## Task Distribution Strategy
+
+| Factor | Strategy |
+|--------|----------|
+| **Task granularity** | Planner decomposes into tasks that take 30–120 seconds each. |
+| **Dependency analysis** | Tasks with dependencies are serialized; independent tasks are parallelized. |
+| **Load balancing** | Workers are assigned tasks greedily (next free worker gets the next task). |
+| **Affinity** | Agents with relevant context (from memory) are preferred for related sub-tasks. |
+
+## Cross-Agent Communication
+
+All cross-agent communication happens through the **SCE event bus** (see [Agent Communication](AGENT_COMMUNICATION.md)):
+
+| Concept | Representation |
+|---------|---------------|
+| **Topic** | `aidevos.<workspace_id>.<run_id>.coordination` |
+| **Envelope** | `{ topic, sender_id, correlation_id, event_type, payload, timestamp }` |
+| **correlation_id** | UUID v4 linking all messages in a coordination flow. |
+| **Delivery** | At-least-once (consumers must idempotently deduplicate). |
+
+**Message types:**
+
+| Event Type | Payload | Direction |
+|------------|---------|-----------|
+| `task.assigned` | `{ task_id, description, dependencies }` | Planner → Worker |
+| `task.completed` | `{ task_id, result_summary, artifacts[] }` | Worker → Planner |
+| `task.failed` | `{ task_id, error, recoverable }` | Worker → Planner |
+| `sync.request` | `{ resource_id, requester }` | Peer → Peer |
+| `sync.grant` | `{ resource_id, holder, ttl }` | Peer → Peer |
+| `barrier.reached` | `{ barrier_id, agent_id }` | Any → All |
+| `barrier.released` | `{ barrier_id }` | Coordinator → All |
+
+## Shared State Model
+
+The **SCE event log is the source of truth** for multi-agent state:
+
+- Every state-changing event is appended to the SCE log.
+- Agents reconstruct state by replaying relevant events (event sourcing pattern).
+- No shared mutable memory — agents communicate through immutable events.
+- The event log is compacted periodically (snapshot + trim) to bound storage.
+
+## Conflict Prevention
+
+### Merge Protocol (merge.begin / merge.commit)
+
+When two agents need to modify the same resource (e.g., the same file):
+
+1. **Lock:** `merge.begin(resource_id, agent_id)` — acquires an advisory lock.
+   - Returns `Ok` if the lock is acquired, `ErrResourceLocked` if held by another agent.
+   - Locks have a TTL (30 seconds). If the lock holder does not call `merge.commit` in time, the lock is released.
+2. **Modify:** The agent performs its changes.
+3. **Commit:** `merge.commit(resource_id, agent_id)` — releases the lock and records the change.
+   - Uses **optimistic concurrency**: the commit includes a version number. If the resource has been modified since the lock was acquired, the commit fails and the agent must retry.
+
+```typescript
+// Agent workflow
+const lock = await merge.begin("src/main.rs", "agent-alpha");
+if (lock.status === "acquired") {
+  const edit = await agent.editFile("src/main.rs", patch);
+  const result = await merge.commit("src/main.rs", "agent-alpha", edit.version);
+  if (result.status === "conflict") {
+    // Another agent modified the file concurrently — rebase and retry
+    await merge.begin("src/main.rs", "agent-alpha"); // re-lock
+    // ... re-apply changes on top of the new version
+  }
+}
+```
+
+## Failure Handling
+
+| Scenario | Behavior |
+|----------|----------|
+| **Worker agent crashes** | Planner detects via SCE heartbeat timeout (30s). Re-dispatches the task to another worker. If no worker available, the Planner escalates to the Kernel. |
+| **Planner agent crashes** | Kernel detects the Planner failure. If the run has checkpoints, a new Planner is spawned from the last checkpoint. If not, the run fails with a partial-results report. |
+| **Peer agent fails (independent task)** | Other peers continue unaffected. The failed agent's tasks are re-assigned by the Kernel. |
+| **Peer agent fails (dependent task)** | Dependent agents wait up to `dependency_timeout` (60s), then proceed without the blocked results. |
+| **SCE broker failure** | The Kernel restarts the SCE broker. In-flight messages are lost (at-most-once delivery is restored). Agents reconnect and re-request state. |
+
+## Synchronization Points
+
+| Point | Mechanism | Description |
+|-------|-----------|-------------|
+| **Merge stage** | `merge.begin/commit` | All agents with changes to the same resource converge at a merge barrier. No agent proceeds past the barrier until all changes are merged. |
+| **Barrier task** | `coordinate.barrier(name)` | Explicit synchronization point. All agents must call `barrier.reached` before any agent proceeds past the barrier. |
+| **Checkpoint** | Run-level snapshot | The Kernel can request a full state checkpoint. All agents pause, flush state to the SCE log, and resume. |
 
 ## Interfaces
 
-- See related subsystems for the concrete API surface this document constrains.
-
-All interfaces follow the envelope defined in [Agent Communication](./AGENT_COMMUNICATION.md) and the error contract defined in [API Spec](./API_SPEC.md).
-
-## Data Model
-
-- Entities and fields are declared in the referenced subsystems and in [DATABASE](./DATABASE.md).
-
-Retention and encryption rules are inherited from [Data Retention](./DATA_RETENTION.md) and [Encryption](./ENCRYPTION.md).
-
-## Failure Modes
-
-- Every failure surfaces through the Shared Context Engine and the audit log.
-- Degradation is preferred over hard failure whenever safety permits.
-
-Every failure emits a structured event on the Shared Context Engine and is recorded in the [Audit Log](./AUDIT_LOG.md).
-
-## Security Considerations
-
-- Trust boundary: crosses only through signed envelopes (see [Security Model](./SECURITY_MODEL.md)).
-- Secrets are read from [Secrets Management](./SECRETS_MANAGEMENT.md); never inlined.
-- All external calls go through [Model Providers](./MODEL_PROVIDERS.md) or the [Plugin SDK](./PLUGIN_SDK.md) — no ad-hoc network access.
-
-## Observability
-
-- Metrics, traces, and logs conform to [Observability](./OBSERVABILITY.md), [Tracing](./TRACING.md), and [Logging](./LOGGING.md).
-- Every run carries a `correlation_id` propagated from the Kernel.
-
-## Acceptance Criteria
-
-- The contracts above are testable via the [Eval Harness](./EVAL_HARNESS.md).
-- A change to this document requires a matching update to any dependent doc listed in *Related Documents*.
-
-## Open Questions
-
-- _Track open questions as ADRs under [templates/ADR](../templates/ADR.md)._
+| Interface | Description |
+|-----------|-------------|
+| `coordinate.barrier(name, timeout?)` | Declare and wait for a synchronization barrier. Returns when all agents in the group have reached the barrier. |
+| `coordinate.broadcast(topic, event_type, payload)` | Send an event to all agents subscribed to the topic. |
+| `coordinate.gather(topic, event_type, timeout?)` | Collect responses from all agents on a topic. Returns `Map<AgentId, payload>`. |
+| `coordinate.send(agent_id, topic, event_type, payload)` | Send a direct message to a specific agent. |
+| `merge.begin(resource_id)` | Acquire an advisory lock on a resource. |
+| `merge.commit(resource_id, version)` | Commit changes and release the lock. |
+| `merge.status(resource_id)` | Check lock status and current version. |
 
 ## Related Documents
 
-- [System Overview](./SYSTEM_OVERVIEW.md)
-- [Main Ai Kernel](./MAIN_AI_KERNEL.md)
-- [Prd](./PRD.md)
-- [Trd](./TRD.md)
-- [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)
+| Document | Description |
+|----------|-------------|
+| [Main AI Kernel](MAIN_AI_KERNEL.md) | Kernel loop, event dispatch, lifecycle management |
+| [AI Group System](AI_GROUP_SYSTEM.md) | Agent group creation, supervision, scaling |
+| [Dynamic Workers](DYNAMIC_WORKERS.md) | Worker process lifecycle, resource management |
+| [Agent Communication](AGENT_COMMUNICATION.md) | SCE message format, topics, delivery guarantees |
+| [Merge Manager](MERGE_MANAGER.md) | Merge protocol, conflict resolution, lock management |
+| [Task Graph](TASK_GRAPH.md) | Task dependency graphs, scheduling, DAG execution |

@@ -1,88 +1,186 @@
 # Getting Started
 
-> Specification for the Getting Started subsystem of the AI Development Operating System. This document is normative — implementations MUST satisfy every MUST clause below.
+> Get AI Dev OS running in under five minutes — from zero to your first `aidevos run "hello world"`.
 
 ## Overview
 
-Getting Started is a first-class subsystem of the AI Development Operating System (AI Dev OS). It participates in the Kernel's intake → plan → route → execute → critique → merge → guard → deliver loop and communicates exclusively through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md). This document defines its purpose, contracts, invariants, and failure modes so that AI agents can reason about it without inspecting any implementation.
+AI Dev OS is a local-first AI development operating system that orchestrates multiple models, manages agent groups, persists memory, and runs goals through a kernel-based pipeline. This guide walks you through installation, initial setup, and your first run.
 
-## Goals
+## Prerequisites
 
-- Provide an authoritative, unambiguous specification for this subsystem.
-- Define contracts, invariants, and acceptance criteria consumed by AI agents.
-- Stay small enough to review, large enough to remove ambiguity.
+| Requirement | Details |
+|-------------|---------|
+| **Operating System** | macOS 13+ (Apple Silicon & Intel), Windows 10/11 (WSL2), Linux (x86_64 & aarch64) |
+| **Terminal** | A modern terminal emulator (iTerm2, Windows Terminal, GNOME Terminal) |
+| **Ollama (recommended)** | Install [Ollama](https://ollama.com) for local model inference. Pull at least `llama3.2:3b` for a functional local setup. |
+| **Network** | Outbound HTTPS access for cloud provider API calls (optional if using only local models) |
+| **Disk** | ~150 MB for the binary; additional space for model storage (varies by provider) |
 
-## Non-Goals
+## Quick Install
 
-- Implementation code — this repository is documentation-only (see [AI Coding Rules](./AI_CODING_RULES.md)).
-- Vendor-specific tuning beyond what [Model Providers](./MODEL_PROVIDERS.md) allows.
-- Duplicating contracts that belong to another subsystem; link instead.
+Choose one of the following methods:
 
-## Requirements
+```bash
+# Option A — curl/sh (macOS & Linux)
+curl -fsSL https://aidevos.dev/install.sh | sh
 
-- **MUST** be consumable by both humans and AI agents.
-- **MUST** publish every state change to the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md).
-- **MUST** pass every rule enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
-- **MUST** be observable through the metrics defined in [Observability](./OBSERVABILITY.md).
-- **SHOULD** degrade gracefully rather than fail hard.
-- **MAY** be extended via the [Plugin SDK](./PLUGIN_SDK.md) when the extension point is declared here.
+# Option B — Homebrew (macOS & Linux)
+brew install aidevos/tap/aidevos
 
-## Architecture
-
-```mermaid
-flowchart LR
-  IN([Input]) --> SUB[Getting Started]
-  SUB --> CTX[(Shared Context Engine)]
-  SUB --> GUARD{Architecture Guardian}
-  GUARD -->|ok| OUT([Output])
-  GUARD -->|veto| SUB
+# Option C — Direct binary download
+# Download the latest release for your platform from:
+# https://github.com/aidevos/aidevos/releases/latest
+# Then move the binary to /usr/local/bin (macOS/Linux) or a PATH directory (Windows)
 ```
 
-The subsystem is stateless at the process boundary; all durable state lives in the [Persistent Memory](./PERSISTENT_MEMORY.md) tier and is projected on demand.
+After install, verify the binary is on your PATH:
 
-## Interfaces
+```bash
+aidevos --version
+```
 
-- See related subsystems for the concrete API surface this document constrains.
+## Initial Setup: `aidevos init`
 
-All interfaces follow the envelope defined in [Agent Communication](./AGENT_COMMUNICATION.md) and the error contract defined in [API Spec](./API_SPEC.md).
+Run the setup wizard to scaffold your local environment:
 
-## Data Model
+```bash
+aidevos init
+```
 
-- Entities and fields are declared in the referenced subsystems and in [DATABASE](./DATABASE.md).
+The interactive wizard does the following:
 
-Retention and encryption rules are inherited from [Data Retention](./DATA_RETENTION.md) and [Encryption](./ENCRYPTION.md).
+1. **Creates `~/.aidevos/`** — the home directory for config, data, keys, and plugins.
+2. **Generates `config.toml`** — with sensible defaults. You are prompted for:
+   - Default model provider (Ollama is the recommended starter).
+   - Ollama endpoint (defaults to `http://localhost:11434`).
+   - Optional cloud provider API keys.
+3. **Pulls default models** — if Ollama is detected, `aidevos init` can pull a recommended starter model.
+4. **Runs `aidevos doctor`** — a health check that validates your setup.
 
-## Failure Modes
+Example output:
 
-- Every failure surfaces through the Shared Context Engine and the audit log.
-- Degradation is preferred over hard failure whenever safety permits.
+```
+$ aidevos init
+✔ Created ~/.aidevos
+✔ Created ~/.aidevos/config.toml
+✔ Detected Ollama at http://localhost:11434
+? Pull default model (llama3.2:3b)? [Y/n] Y
+✔ Pulled llama3.2:3b
+✔ Running doctor...
+✔ All checks passed
+```
 
-Every failure emits a structured event on the Shared Context Engine and is recorded in the [Audit Log](./AUDIT_LOG.md).
+## First Run: `aidevos run "hello world"`
 
-## Security Considerations
+Once setup is complete, submit your first goal:
 
-- Trust boundary: crosses only through signed envelopes (see [Security Model](./SECURITY_MODEL.md)).
-- Secrets are read from [Secrets Management](./SECRETS_MANAGEMENT.md); never inlined.
-- All external calls go through [Model Providers](./MODEL_PROVIDERS.md) or the [Plugin SDK](./PLUGIN_SDK.md) — no ad-hoc network access.
+```bash
+aidevos run "hello world"
+```
 
-## Observability
+The Kernel processes the goal through its intake → plan → route → execute → critique pipeline. You will see streaming output as agents work:
 
-- Metrics, traces, and logs conform to [Observability](./OBSERVABILITY.md), [Tracing](./TRACING.md), and [Logging](./LOGGING.md).
-- Every run carries a `correlation_id` propagated from the Kernel.
+```
+┌─ Intake ──────────────────────────
+│ Goal: hello world
+├─ Plan ────────────────────────────
+│ 1. Parse the greeting intent
+│ 2. Generate a friendly response
+├─ Route ───────────────────────────
+│ Assigned to: general (llama3.2:3b)
+├─ Execute ─────────────────────────
+│ Hello! How can I help you today?
+└─ Result ──────────────────────────
+✔ Completed in 1.2s
+```
 
-## Acceptance Criteria
+To see all runs:
 
-- The contracts above are testable via the [Eval Harness](./EVAL_HARNESS.md).
-- A change to this document requires a matching update to any dependent doc listed in *Related Documents*.
+```bash
+aidevos runs list
+```
 
-## Open Questions
+## Configuration Basics
 
-- _Track open questions as ADRs under [templates/ADR](../templates/ADR.md)._
+AI Dev OS reads configuration from up to five sources merged in order of precedence:
+
+| Priority | Source | Path |
+|----------|--------|------|
+| Highest | Environment variables | `AIDEVOS_*` |
+| | Project config | `{project_root}/.aidevos.toml` |
+| | User config | `~/.aidevos/config.toml` |
+| | System config | `/etc/aidevos/config.toml` |
+| Lowest | Embedded defaults | Binary |
+
+Edit `~/.aidevos/config.toml` to change providers, router strategy, logging, and more. Changes to watched keys reload automatically.
+
+```toml
+[backend]
+mode = "server"
+host = "127.0.0.1"
+port = 8374
+
+[providers.ollama]
+endpoint = "http://localhost:11434"
+model = "llama3.2:3b"
+```
+
+See [Configuration](./CONFIGURATION.md) for the full reference.
+
+## Connecting Cloud Providers (Optional)
+
+AI Dev OS supports cloud providers alongside local models. Add API keys via `aidevos init --configure-providers` or by editing `config.toml`:
+
+```toml
+[providers.openai]
+api_key = "${OPENAI_API_KEY}"
+model = "gpt-4o"
+
+[providers.anthropic]
+api_key = "${ANTHROPIC_API_KEY}"
+model = "claude-sonnet-4-20250514"
+```
+
+Environment variables are resolved at runtime. Supported providers are documented in [Model Providers](./MODEL_PROVIDERS.md).
+
+## Common Next Steps
+
+| Step | Guide |
+|------|-------|
+| Learn the CLI | [CLI Reference](./CLI.md) |
+| Set up agent groups | [AI Groups](./AI_GROUPS.md) |
+| Configure the Nine Router | [Nine Router](./NINE_ROUTER.md) |
+| Add project-specific config | [Configuration](./CONFIGURATION.md) |
+| Explore the knowledge system | [Knowledge System](./KNOWLEDGE_SYSTEM.md) |
+| Write custom prompts | [Prompt Governance](./PROMPT_GOVERNANCE.md) |
+
+## Troubleshooting Common Issues
+
+### `aidevos: command not found`
+
+Ensure the install directory is on your `PATH`. On macOS/Linux, the installer defaults to `/usr/local/bin`. Verify with `which aidevos` or re-run the installer.
+
+### `doctor` reports "Ollama not reachable"
+
+Confirm Ollama is running: `ollama list`. Start it with `ollama serve` if needed. Check the endpoint in `~/.aidevos/config.toml` matches your Ollama configuration.
+
+### Run hangs at "Waiting for provider"
+
+The selected model may not be pulled. Run `ollama pull <model>` or switch to an available model in config.
+
+### Config changes not taking effect
+
+Config files are watched for changes; some keys require a restart. Run `aidevos doctor --verbose` to see which config values are active.
+
+### "Connection refused" errors
+
+The backend process may not be running. Start it with `aidevos server start` in a separate terminal or use `aidevos run --mode=direct` to skip the server.
 
 ## Related Documents
 
-- [System Overview](./SYSTEM_OVERVIEW.md)
-- [Main Ai Kernel](./MAIN_AI_KERNEL.md)
-- [Prd](./PRD.md)
-- [Trd](./TRD.md)
-- [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)
+- [Installation](./INSTALLATION.md) — detailed system requirements and install methods
+- [CLI](./CLI.md) — full command reference
+- [Local Dev](./LOCAL_DEV.md) — contributing to AI Dev OS itself
+- [FAQ](./FAQ.md) — frequently asked questions
+- [Configuration](./CONFIGURATION.md) — full config reference
+- [Troubleshooting](./TROUBLESHOOTING.md) — deeper diagnostic guide

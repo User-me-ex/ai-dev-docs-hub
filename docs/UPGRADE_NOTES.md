@@ -1,88 +1,116 @@
 # Upgrade Notes
 
-> Specification for the Upgrade Notes subsystem of the AI Development Operating System. This document is normative — implementations MUST satisfy every MUST clause below.
-
 ## Overview
 
-Upgrade Notes is a first-class subsystem of the AI Development Operating System (AI Dev OS). It participates in the Kernel's intake → plan → route → execute → critique → merge → guard → deliver loop and communicates exclusively through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md). This document defines its purpose, contracts, invariants, and failure modes so that AI agents can reason about it without inspecting any implementation.
+This document contains version-specific upgrade instructions for AI Dev OS. Always consult the relevant notes before upgrading between major or minor versions.
 
-## Goals
+If you are skipping versions, apply each upgrade step sequentially — do not jump directly to the latest version.
 
-- Provide an authoritative, unambiguous specification for this subsystem.
-- Define contracts, invariants, and acceptance criteria consumed by AI agents.
-- Stay small enough to review, large enough to remove ambiguity.
+---
 
-## Non-Goals
+## Upgrade Checking
 
-- Implementation code — this repository is documentation-only (see [AI Coding Rules](./AI_CODING_RULES.md)).
-- Vendor-specific tuning beyond what [Model Providers](./MODEL_PROVIDERS.md) allows.
-- Duplicating contracts that belong to another subsystem; link instead.
+```bash
+# Check current version and available upgrades
+aidevos version --check-upgrade
 
-## Requirements
-
-- **MUST** be consumable by both humans and AI agents.
-- **MUST** publish every state change to the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md).
-- **MUST** pass every rule enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
-- **MUST** be observable through the metrics defined in [Observability](./OBSERVABILITY.md).
-- **SHOULD** degrade gracefully rather than fail hard.
-- **MAY** be extended via the [Plugin SDK](./PLUGIN_SDK.md) when the extension point is declared here.
-
-## Architecture
-
-```mermaid
-flowchart LR
-  IN([Input]) --> SUB[Upgrade Notes]
-  SUB --> CTX[(Shared Context Engine)]
-  SUB --> GUARD{Architecture Guardian}
-  GUARD -->|ok| OUT([Output])
-  GUARD -->|veto| SUB
+# Run pre-upgrade diagnostics
+aidevos doctor
 ```
 
-The subsystem is stateless at the process boundary; all durable state lives in the [Persistent Memory](./PERSISTENT_MEMORY.md) tier and is projected on demand.
+`aidevos doctor` validates your environment, checks for breaking changes, and reports any configuration or data migrations required before upgrading.
 
-## Interfaces
+---
 
-- See related subsystems for the concrete API surface this document constrains.
+## v0.1.0 → v0.2.0
 
-All interfaces follow the envelope defined in [Agent Communication](./AGENT_COMMUNICATION.md) and the error contract defined in [API Spec](./API_SPEC.md).
+*Notes will be added here when v0.2.0 is released.*
 
-## Data Model
+---
 
-- Entities and fields are declared in the referenced subsystems and in [DATABASE](./DATABASE.md).
+## Pre-v1 → v1.0 Migration
 
-Retention and encryption rules are inherited from [Data Retention](./DATA_RETENTION.md) and [Encryption](./ENCRYPTION.md).
+### Python to Rust Runtime
 
-## Failure Modes
+v1.0 replaces the Python runtime with a Rust native binary. The `aidevos` CLI is now a single statically-linked executable.
 
-- Every failure surfaces through the Shared Context Engine and the audit log.
-- Degradation is preferred over hard failure whenever safety permits.
+**Steps:**
 
-Every failure emits a structured event on the Shared Context Engine and is recorded in the [Audit Log](./AUDIT_LOG.md).
+1. Uninstall the Python package: `pip uninstall aidevos`
+2. Download the v1.0 binary for your platform from the releases page
+3. Verify the binary: `aidevos version`
+4. Run migration tool: `aidevos migrate pre-v1-to-v1`
 
-## Security Considerations
+### SQLite Schema Migration
 
-- Trust boundary: crosses only through signed envelopes (see [Security Model](./SECURITY_MODEL.md)).
-- Secrets are read from [Secrets Management](./SECRETS_MANAGEMENT.md); never inlined.
-- All external calls go through [Model Providers](./MODEL_PROVIDERS.md) or the [Plugin SDK](./PLUGIN_SDK.md) — no ad-hoc network access.
+The internal SQLite database schema changed between pre-v1 and v1.0. The migration tool handles this automatically, but manual verification is recommended:
 
-## Observability
+```bash
+aidevos migrate pre-v1-to-v1 --dry-run  # preview changes
+aidevos migrate pre-v1-to-v1            # apply migration
+```
 
-- Metrics, traces, and logs conform to [Observability](./OBSERVABILITY.md), [Tracing](./TRACING.md), and [Logging](./LOGGING.md).
-- Every run carries a `correlation_id` propagated from the Kernel.
+Backup your database before migrating:
 
-## Acceptance Criteria
+```bash
+cp ~/.local/share/aidevos/aidevos.db ~/.local/share/aidevos/aidevos.db.backup
+```
 
-- The contracts above are testable via the [Eval Harness](./EVAL_HARNESS.md).
-- A change to this document requires a matching update to any dependent doc listed in *Related Documents*.
+### Prompt Format Changes
 
-## Open Questions
+Custom prompt templates (`.aidevos/prompts/`) must be updated:
 
-- _Track open questions as ADRs under [templates/ADR](../templates/ADR.md)._
+- `{{ variable }}` syntax changed to `{variable}`
+- Tool call format changed from XML tags to JSON blocks
+- System prompt sections are now order-independent
+
+Run `aidevos doctor` to detect and report any incompatible prompt files.
+
+### Config File Changes
+
+| Pre-v1 | v1.0 | Notes |
+|---|---|---|
+| `[agent]` | `[runtime]` | Renamed |
+| `memory.backend` | `[memory] backend` | Restructured |
+| `logging.level` | `[log] level` | Restructured |
+| `provider.api_key` | `[auth] credentials_file` | Moved — keys no longer stored in config |
+
+The migration tool (`aidevos migrate`) automatically rewrites your config file. The original is saved as `config.toml.pre-v1.backup`.
+
+---
+
+## Rollback Instructions
+
+If an upgrade fails or introduces regressions:
+
+1. Restore the previous binary: keep the previous release tarball or use a package manager rollback.
+2. Restore database: `cp aidevos.db.backup aidevos.db`
+3. Restore config: `cp config.toml.pre-v1.backup config.toml`
+4. Verify: `aidevos doctor`
+
+Downgrading across a database schema change may require manual intervention. Contact support if the rollback path is unclear.
+
+---
+
+## Verifying Successful Upgrade
+
+```bash
+aidevos version        # confirm expected version
+aidevos doctor         # check all systems green
+aidevos run --help     # smoke test the CLI
+```
+
+Run a minimal test task to confirm the agent runtime works:
+
+```bash
+echo "say hello" | aidevos run --stdin
+```
+
+---
 
 ## Related Documents
 
-- [System Overview](./SYSTEM_OVERVIEW.md)
-- [Main Ai Kernel](./MAIN_AI_KERNEL.md)
-- [Prd](./PRD.md)
-- [Trd](./TRD.md)
-- [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)
+- [Migration Guide](./MIGRATION_GUIDE.md)
+- [Versioning Policy](./VERSIONING.md)
+- [Release Process](./RELEASE_PROCESS.md)
+- [Changelog](./CHANGELOG.md)

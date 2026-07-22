@@ -1,88 +1,115 @@
 # Caching Strategy
 
-> Specification for the Caching Strategy subsystem of the AI Development Operating System. This document is normative — implementations MUST satisfy every MUST clause below.
+> Caching layers, invalidation policies, and configuration across AI Dev OS.
 
 ## Overview
 
-Caching Strategy is a first-class subsystem of the AI Development Operating System (AI Dev OS). It participates in the Kernel's intake → plan → route → execute → critique → merge → guard → deliver loop and communicates exclusively through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md). This document defines its purpose, contracts, invariants, and failure modes so that AI agents can reason about it without inspecting any implementation.
+Caching reduces latency, saves API costs, and avoids redundant computation throughout AI Dev OS. Caches exist at multiple levels — in-process memory, local SQLite, and optional Redis — with per-cache TTL, max-size, and invalidation policy. Every cache MISS that could have been a HIT is tracked as a metric (see [Observability](./OBSERVABILITY.md)).
 
-## Goals
+## Where Caching Is Used
 
-- Provide an authoritative, unambiguous specification for this subsystem.
-- Define contracts, invariants, and acceptance criteria consumed by AI agents.
-- Stay small enough to review, large enough to remove ambiguity.
+Caching is applied to data that is expensive to compute or fetch and changes infrequently relative to read frequency. Write-heavy data (audit log, events) is not cached.
 
-## Non-Goals
+## Cache Locations
 
-- Implementation code — this repository is documentation-only (see [AI Coding Rules](./AI_CODING_RULES.md)).
-- Vendor-specific tuning beyond what [Model Providers](./MODEL_PROVIDERS.md) allows.
-- Duplicating contracts that belong to another subsystem; link instead.
+| Cache | Key | Value | Backend | TTL | Max Size |
+|---|---|---|---|---|---|
+| Model catalog | `model:<provider>:<id>` | Model metadata + capabilities | In-memory LRU | 5 min | 500 entries |
+| Embedding cache | `embed:<text_hash>` | Embedding vector | SQLite | 24 h | 100 K entries |
+| SCE snapshots | `sce:<topic>:<sequence>` | Serialized event batch | In-memory LRU | 30 s | 200 entries |
+| Graph traversal | `graph:<query_hash>` | Path result set | In-memory LRU | 60 s | 100 entries |
+| KB query results | `kb:<query_hash>:<filters>` | Retrieved chunks + scores | SQLite | 10 min | 5 K entries |
+| Dependency map | `dep:<workspace_id>` | Resolved dependency graph | In-memory LRU | 60 s | 50 entries |
+| Config (parsed) | `config:<path>` | Parsed TOML/YAML | In-memory LRU | 30 s | 20 entries |
+| Provider responses | `provider:<model>:<prompt_hash>` | Cached LLM response | SQLite | 1 h | 10 K entries |
 
-## Requirements
+## Cache Invalidation
 
-- **MUST** be consumable by both humans and AI agents.
-- **MUST** publish every state change to the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md).
-- **MUST** pass every rule enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
-- **MUST** be observable through the metrics defined in [Observability](./OBSERVABILITY.md).
-- **SHOULD** degrade gracefully rather than fail hard.
-- **MAY** be extended via the [Plugin SDK](./PLUGIN_SDK.md) when the extension point is declared here.
+Three invalidation mechanisms are used, applied per cache as listed in the table above:
 
-## Architecture
+### TTL-Based
 
-```mermaid
-flowchart LR
-  IN([Input]) --> SUB[Caching Strategy]
-  SUB --> CTX[(Shared Context Engine)]
-  SUB --> GUARD{Architecture Guardian}
-  GUARD -->|ok| OUT([Output])
-  GUARD -->|veto| SUB
+Expires entries after a fixed duration from write time. Read during expiry returns the stale value while a background refresh fetches new data (stale-while-revalidate). This is the default for all caches.
+
+### Event-Based
+
+Invalidation is triggered by SCE events. When a relevant mutation occurs, the cache subscriber evicts or refreshes affected entries:
+
+| SCE Event | Cache Action |
+|---|---|
+| `model.catalog.updated` | Evict all model catalog entries |
+| `knowledge.base.changed` | Evict KB query results for affected source |
+| `workspace.config.changed` | Evict config and dependency map entries |
+| `plugin.installed` | Evict model catalog (if plugin adds models) |
+
+### Explicit Refresh
+
+Callers may force a cache refresh by passing `refresh=true` in the query or calling `invalidate(namespace, key)` on the cache API.
+
+## Cache Backends
+
+| Backend | Use Case | Persistence |
+|---|---|---|
+| In-memory LRU | Hot caches, sub-ms access | None — lost on restart |
+| SQLite (local) | Persistent caches, < 10 ms access | Survives restart, bounded size |
+| Redis (optional) | Shared cache across processes | Configurable eviction policy |
+
+In-memory LRU uses `ordereddict` with O(1) get/set. SQLite cache uses a single table with `(namespace, key, value, expires_at)` and periodic VACUUM. Redis, when configured, is used as a shared fallback for SQLite caches to allow multi-process cache sharing.
+
+## Cache Configuration
+
+Per-cache configuration is set in `config.toml`:
+
+```toml
+[cache.embedding]
+backend = "sqlite"
+ttl_seconds = 86400
+max_entries = 100000
+
+[cache.model_catalog]
+backend = "memory"
+ttl_seconds = 300
+max_entries = 500
+
+[cache.provider_responses]
+backend = "sqlite"
+ttl_seconds = 3600
+max_entries = 10000
 ```
 
-The subsystem is stateless at the process boundary; all durable state lives in the [Persistent Memory](./PERSISTENT_MEMORY.md) tier and is projected on demand.
+Global defaults can be overridden per environment:
 
-## Interfaces
+```toml
+[cache]
+backend = "redis"  # override all caches to use Redis
+redis_url = "redis://localhost:6379/0"
+```
 
-- See related subsystems for the concrete API surface this document constrains.
+## Cache Warming
 
-All interfaces follow the envelope defined in [Agent Communication](./AGENT_COMMUNICATION.md) and the error contract defined in [API Spec](./API_SPEC.md).
+On startup, the following caches are pre-loaded:
 
-## Data Model
+1. **Model catalog** — queried from SQLite persistent store and loaded into the in-memory LRU cache.
+2. **Plugin registry** — loaded into memory from disk.
+3. **Configuration** — all config files parsed and cached.
+4. **Dependency map** — resolved and cached for each active workspace.
 
-- Entities and fields are declared in the referenced subsystems and in [DATABASE](./DATABASE.md).
-
-Retention and encryption rules are inherited from [Data Retention](./DATA_RETENTION.md) and [Encryption](./ENCRYPTION.md).
+Cache warming runs before the Kernel loop starts, ensuring the first run does not pay cold-start penalties.
 
 ## Failure Modes
 
-- Every failure surfaces through the Shared Context Engine and the audit log.
-- Degradation is preferred over hard failure whenever safety permits.
-
-Every failure emits a structured event on the Shared Context Engine and is recorded in the [Audit Log](./AUDIT_LOG.md).
-
-## Security Considerations
-
-- Trust boundary: crosses only through signed envelopes (see [Security Model](./SECURITY_MODEL.md)).
-- Secrets are read from [Secrets Management](./SECRETS_MANAGEMENT.md); never inlined.
-- All external calls go through [Model Providers](./MODEL_PROVIDERS.md) or the [Plugin SDK](./PLUGIN_SDK.md) — no ad-hoc network access.
-
-## Observability
-
-- Metrics, traces, and logs conform to [Observability](./OBSERVABILITY.md), [Tracing](./TRACING.md), and [Logging](./LOGGING.md).
-- Every run carries a `correlation_id` propagated from the Kernel.
-
-## Acceptance Criteria
-
-- The contracts above are testable via the [Eval Harness](./EVAL_HARNESS.md).
-- A change to this document requires a matching update to any dependent doc listed in *Related Documents*.
-
-## Open Questions
-
-- _Track open questions as ADRs under [templates/ADR](../templates/ADR.md)._
+| Failure | Cause | Effect | Mitigation |
+|---|---|---|---|
+| Stale cache | TTL too long or missed invalidation event | Caller reads outdated data | Reduce TTL, add event-based invalidation |
+| Cache miss storm | Cold start or mass eviction | All requests hit upstream | Pre-warming + gradual TTL jitter |
+| Cache backend unavailable | SQLite locked or Redis down | Falls through to upstream | Circuit breaker falls back to memory-only |
+| Memory pressure | LRU cache grows unbounded | OOM or swap | Enforce max_entries with eviction |
+| Thundering herd | Concurrent MISS for same key | Multiple upstream calls | Request coalescing (first caller fetches, others wait) |
 
 ## Related Documents
 
-- [System Overview](./SYSTEM_OVERVIEW.md)
-- [Main Ai Kernel](./MAIN_AI_KERNEL.md)
-- [Prd](./PRD.md)
-- [Trd](./TRD.md)
-- [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)
+- [Performance](./PERFORMANCE.md) — performance targets and optimization strategies
+- [Model Discovery](./MODEL_DISCOVERY.md) — how the model catalog is populated
+- [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md) — SCE event-driven invalidation
+- [Knowledge System](./KNOWLEDGE_SYSTEM.md) — KB query result caching
+- [Configuration](./CONFIGURATION.md) — config file parsing and caching

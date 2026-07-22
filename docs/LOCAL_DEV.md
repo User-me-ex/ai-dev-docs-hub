@@ -1,88 +1,131 @@
 # Local Dev
 
-> Specification for the Local Dev subsystem of the AI Development Operating System. This document is normative — implementations MUST satisfy every MUST clause below.
+> Guide for contributing to the AI Dev OS codebase — from cloning to shipping.
 
 ## Overview
 
-Local Dev is a first-class subsystem of the AI Development Operating System (AI Dev OS). It participates in the Kernel's intake → plan → route → execute → critique → merge → guard → deliver loop and communicates exclusively through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md). This document defines its purpose, contracts, invariants, and failure modes so that AI agents can reason about it without inspecting any implementation.
+AI Dev OS is written in TypeScript and compiled to a native binary via Bun. The repository is a monorepo containing the CLI, Kernel, Router, plugin system, and documentation. This guide covers the development workflow, tooling, and conventions.
 
-## Goals
+## Prerequisites
 
-- Provide an authoritative, unambiguous specification for this subsystem.
-- Define contracts, invariants, and acceptance criteria consumed by AI agents.
-- Stay small enough to review, large enough to remove ambiguity.
+| Tool | Version | Purpose |
+|------|---------|---------|
+| **Bun** | 1.2+ | Runtime, package manager, bundler |
+| **Node.js** | 20+ | Some tooling scripts |
+| **TypeScript** | 5.5+ | Language (handled by Bun) |
+| **Git** | 2.40+ | Version control |
 
-## Non-Goals
+Install Bun: `curl -fsSL https://bun.sh/install | bash`
 
-- Implementation code — this repository is documentation-only (see [AI Coding Rules](./AI_CODING_RULES.md)).
-- Vendor-specific tuning beyond what [Model Providers](./MODEL_PROVIDERS.md) allows.
-- Duplicating contracts that belong to another subsystem; link instead.
+## Repository Setup
 
-## Requirements
-
-- **MUST** be consumable by both humans and AI agents.
-- **MUST** publish every state change to the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md).
-- **MUST** pass every rule enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
-- **MUST** be observable through the metrics defined in [Observability](./OBSERVABILITY.md).
-- **SHOULD** degrade gracefully rather than fail hard.
-- **MAY** be extended via the [Plugin SDK](./PLUGIN_SDK.md) when the extension point is declared here.
-
-## Architecture
-
-```mermaid
-flowchart LR
-  IN([Input]) --> SUB[Local Dev]
-  SUB --> CTX[(Shared Context Engine)]
-  SUB --> GUARD{Architecture Guardian}
-  GUARD -->|ok| OUT([Output])
-  GUARD -->|veto| SUB
+```bash
+git clone https://github.com/aidevos/aidevos.git
+cd aidevos
+bun install
+bun run build
 ```
 
-The subsystem is stateless at the process boundary; all durable state lives in the [Persistent Memory](./PERSISTENT_MEMORY.md) tier and is projected on demand.
+The monorepo structure: `src/` (cli, kernel, router, providers, shared), `tests/`, `docs/`, `scripts/`, and a root `package.json`.
 
-## Interfaces
+## Development Workflow
 
-- See related subsystems for the concrete API surface this document constrains.
+The standard loop: **code → lint → test → build**
 
-All interfaces follow the envelope defined in [Agent Communication](./AGENT_COMMUNICATION.md) and the error contract defined in [API Spec](./API_SPEC.md).
+### 1. Code
 
-## Data Model
+Make changes in `src/`. TypeScript strict mode is enforced. Run the dev watcher for fast iteration:
 
-- Entities and fields are declared in the referenced subsystems and in [DATABASE](./DATABASE.md).
+```bash
+bun run dev
+```
 
-Retention and encryption rules are inherited from [Data Retention](./DATA_RETENTION.md) and [Encryption](./ENCRYPTION.md).
+### 2. Lint
 
-## Failure Modes
+```bash
+bun run lint          # Check for issues
+bun run lint:fix      # Auto-fix
+```
 
-- Every failure surfaces through the Shared Context Engine and the audit log.
-- Degradation is preferred over hard failure whenever safety permits.
+Linting covers TypeScript strict checks, import ordering, and formatting via Biome.
 
-Every failure emits a structured event on the Shared Context Engine and is recorded in the [Audit Log](./AUDIT_LOG.md).
+### 3. Test
 
-## Security Considerations
+```bash
+bun run test                # All tests
+bun run test:unit           # Unit tests only
+bun run test:integration    # Integration tests (requires Ollama)
+bun run test:coverage       # With coverage report
+```
 
-- Trust boundary: crosses only through signed envelopes (see [Security Model](./SECURITY_MODEL.md)).
-- Secrets are read from [Secrets Management](./SECRETS_MANAGEMENT.md); never inlined.
-- All external calls go through [Model Providers](./MODEL_PROVIDERS.md) or the [Plugin SDK](./PLUGIN_SDK.md) — no ad-hoc network access.
+Tests use Bun's built-in test runner. Integration tests require an active Ollama instance. Test files use the `.test.ts` convention in `tests/`.
 
-## Observability
+### 4. Build
 
-- Metrics, traces, and logs conform to [Observability](./OBSERVABILITY.md), [Tracing](./TRACING.md), and [Logging](./LOGGING.md).
-- Every run carries a `correlation_id` propagated from the Kernel.
+```bash
+bun run build          # TypeScript compilation
+bun run build:binary   # Native binary via Bun.compile
+bun run build:all      # Both
+```
 
-## Acceptance Criteria
+The compiled binary is at `dist/aidevos`.
 
-- The contracts above are testable via the [Eval Harness](./EVAL_HARNESS.md).
-- A change to this document requires a matching update to any dependent doc listed in *Related Documents*.
+Run `bun run test` for the full suite. Single file: `bun test tests/kernel/planner.test.ts`. Watch mode: `bun run test:watch`.
 
-## Open Questions
+Build the binary with `bun run build:binary` — output at `dist/aidevos` with no runtime dependencies. Cross-compile targets via `./scripts/cross-build.sh --target linux-arm64`.
 
-- _Track open questions as ADRs under [templates/ADR](../templates/ADR.md)._
+Preview docs locally with `bun run docs:serve` (docsify, opens at `http://localhost:3000`).
+
+## Debugging Tips
+
+| Situation | Approach |
+|-----------|----------|
+| **Verbose logging** | `AIDEVOS_LOG_LEVEL=debug` or `--verbose` |
+| **Kernel traces** | Enable `[tracing]` in config, view at `http://localhost:4318` |
+| **Binary crashes** | Run with `bun run dev` for full stack traces |
+| **Provider issues** | `aidevos doctor --verbose` |
+| **Config not loading** | `aidevos doctor --show-config` |
+| **Memory inspector** | `aidevos memory query` |
+
+## Commit Conventions
+
+AI Dev OS follows [Conventional Commits](https://www.conventionalcommits.org/):
+
+```
+<type>(<scope>): <description>
+```
+
+| Type | Usage |
+|------|-------|
+| `feat` | New feature |
+| `fix` | Bug fix |
+| `docs` | Documentation only |
+| `refactor` | Code change, no behavior change |
+| `test` | Adding/fixing tests |
+| `chore` | Build, CI, tooling |
+
+Scopes include: `cli`, `kernel`, `router`, `memory`, `providers`, `config`, `docs`.
+
+```
+feat(kernel): add timeout to planner phase
+fix(router): handle empty fallback list
+docs(cli): document --json flag
+```
+
+## CI/CD Overview
+
+| Pipeline | Trigger | What it does |
+|----------|---------|--------------|
+| **PR checks** | Every PR | `lint → test:unit → test:integration → build:binary` |
+| **Main branch** | Push to `main` | All PR checks + publish `:latest` Docker image |
+| **Release** | Tag `v*` | Build all platform binaries, publish GitHub release, npm + Homebrew + Docker |
+
+CI is defined in `.github/workflows/`. All PR checks must pass before merge.
 
 ## Related Documents
 
-- [System Overview](./SYSTEM_OVERVIEW.md)
-- [Main Ai Kernel](./MAIN_AI_KERNEL.md)
-- [Prd](./PRD.md)
-- [Trd](./TRD.md)
-- [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)
+- [Contributing](./CONTRIBUTING.md) — code of conduct and PR process
+- [Testing Strategy](./TESTING_STRATEGY.md) — test architecture and coverage
+- [Code of Conduct](./CODE_OF_CONDUCT.md) — community standards
+- [CLI Reference](./CLI.md) — testing the built binary
+- [Installation](./INSTALLATION.md) — installing from source

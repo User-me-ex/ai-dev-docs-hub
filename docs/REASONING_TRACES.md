@@ -1,88 +1,118 @@
 # Reasoning Traces
 
-> Specification for the Reasoning Traces subsystem of the AI Development Operating System. This document is normative — implementations MUST satisfy every MUST clause below.
-
 ## Overview
 
-Reasoning Traces is a first-class subsystem of the AI Development Operating System (AI Dev OS). It participates in the Kernel's intake → plan → route → execute → critique → merge → guard → deliver loop and communicates exclusively through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md). This document defines its purpose, contracts, invariants, and failure modes so that AI agents can reason about it without inspecting any implementation.
+Reasoning traces capture the internal chain-of-thought of AI agents during task execution. Each trace records the input, intermediate reasoning, and output for every step an agent takes, enabling debugging, audit, and transparency.
 
-## Goals
+Traces are distinct from logs — they capture model-level reasoning rather than system events. They are the primary mechanism for understanding *why* an agent made a particular decision.
 
-- Provide an authoritative, unambiguous specification for this subsystem.
-- Define contracts, invariants, and acceptance criteria consumed by AI agents.
-- Stay small enough to review, large enough to remove ambiguity.
+---
 
-## Non-Goals
+## Trace Schema
 
-- Implementation code — this repository is documentation-only (see [AI Coding Rules](./AI_CODING_RULES.md)).
-- Vendor-specific tuning beyond what [Model Providers](./MODEL_PROVIDERS.md) allows.
-- Duplicating contracts that belong to another subsystem; link instead.
+| Field | Type | Description |
+|---|---|---|
+| `trace_id` | `uuid` | Unique trace identifier |
+| `run_id` | `uuid` | Associated run ID |
+| `worker_id` | `string` | Agent or worker that generated the trace |
+| `step` | `integer` | Step number within the run |
+| `input` | `string` | Input prompt or context at this step |
+| `reasoning` | `string` | Raw chain-of-thought text from the model |
+| `output` | `string` | Agent output (action, tool call, or response) |
+| `confidence` | `float` | Model-reported confidence (0.0–1.0), if available |
+| `tokens_used` | `integer` | Token count for this step |
+| `timestamp` | `datetime` | UTC timestamp of the step |
 
-## Requirements
+---
 
-- **MUST** be consumable by both humans and AI agents.
-- **MUST** publish every state change to the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md).
-- **MUST** pass every rule enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
-- **MUST** be observable through the metrics defined in [Observability](./OBSERVABILITY.md).
-- **SHOULD** degrade gracefully rather than fail hard.
-- **MAY** be extended via the [Plugin SDK](./PLUGIN_SDK.md) when the extension point is declared here.
+## Trace Levels
 
-## Architecture
+| Level | Description |
+|---|---|
+| `none` | No tracing. Zero overhead, no insight. |
+| `concise` | Stores only final reasoning summary and output for each step. Low overhead. |
+| `full` | Stores complete input, raw reasoning, and output. Maximum insight, higher overhead. |
 
-```mermaid
-flowchart LR
-  IN([Input]) --> SUB[Reasoning Traces]
-  SUB --> CTX[(Shared Context Engine)]
-  SUB --> GUARD{Architecture Guardian}
-  GUARD -->|ok| OUT([Output])
-  GUARD -->|veto| SUB
+Configure via `aidevos.toml`:
+
+```toml
+[traces]
+level = "concise"  # none | concise | full
 ```
 
-The subsystem is stateless at the process boundary; all durable state lives in the [Persistent Memory](./PERSISTENT_MEMORY.md) tier and is projected on demand.
+---
 
-## Interfaces
+## Storage
 
-- See related subsystems for the concrete API surface this document constrains.
+Traces are written to a dedicated SCE (System Communication Event) topic under `aidevos.traces.*`. This enables real-time streaming and integration with observability pipelines.
 
-All interfaces follow the envelope defined in [Agent Communication](./AGENT_COMMUNICATION.md) and the error contract defined in [API Spec](./API_SPEC.md).
+For long-lived debugging, traces may also be persisted to Persistent Memory with session-based retention (default: 7 days). Retention policy is configurable:
 
-## Data Model
+```toml
+[traces.storage]
+backend = "sce"          # sce | memory
+retention_days = 7       # 0 = indefinite
+```
 
-- Entities and fields are declared in the referenced subsystems and in [DATABASE](./DATABASE.md).
+---
 
-Retention and encryption rules are inherited from [Data Retention](./DATA_RETENTION.md) and [Encryption](./ENCRYPTION.md).
+## Viewing Traces
 
-## Failure Modes
+### CLI
 
-- Every failure surfaces through the Shared Context Engine and the audit log.
-- Degradation is preferred over hard failure whenever safety permits.
+```bash
+aidevos run show --traces <run-id>
+aidevos run show --traces --level full <run-id>
+```
 
-Every failure emits a structured event on the Shared Context Engine and is recorded in the [Audit Log](./AUDIT_LOG.md).
+### API
 
-## Security Considerations
+```
+GET /v1/runs/:id/traces
+```
 
-- Trust boundary: crosses only through signed envelopes (see [Security Model](./SECURITY_MODEL.md)).
-- Secrets are read from [Secrets Management](./SECRETS_MANAGEMENT.md); never inlined.
-- All external calls go through [Model Providers](./MODEL_PROVIDERS.md) or the [Plugin SDK](./PLUGIN_SDK.md) — no ad-hoc network access.
+Query parameters: `?level=concise&step_gt=5&limit=50`
 
-## Observability
+---
 
-- Metrics, traces, and logs conform to [Observability](./OBSERVABILITY.md), [Tracing](./TRACING.md), and [Logging](./LOGGING.md).
-- Every run carries a `correlation_id` propagated from the Kernel.
+## Privacy Considerations
 
-## Acceptance Criteria
+Traces may contain sensitive reasoning — including user data, API keys, or internal business logic encountered during agent execution. Access to traces MUST be access-controlled:
 
-- The contracts above are testable via the [Eval Harness](./EVAL_HARNESS.md).
-- A change to this document requires a matching update to any dependent doc listed in *Related Documents*.
+- Only run owners and admins can view traces by default.
+- Traces are encrypted at rest.
+- Trace export should strip sensitive fields (configurable filter).
 
-## Open Questions
+---
 
-- _Track open questions as ADRs under [templates/ADR](../templates/ADR.md)._
+## Performance Impact
+
+Full tracing adds per-step overhead for serialization and I/O. Sampling reduces cost:
+
+```toml
+[traces.sampling]
+rate = 0.1  # record 10% of all steps
+```
+
+Production systems should use `concise` level or sampling unless actively debugging.
+
+---
+
+## Integration with Eval Harness
+
+When an evaluation fails, the corresponding trace is automatically captured and linked to the eval result. This allows developers to replay the agent's reasoning at the point of failure:
+
+```bash
+aidevos eval show <eval-id> --trace
+```
+
+Failed eval traces are retained even if the retention policy would otherwise expire them.
+
+---
 
 ## Related Documents
 
-- [System Overview](./SYSTEM_OVERVIEW.md)
-- [Main Ai Kernel](./MAIN_AI_KERNEL.md)
-- [Prd](./PRD.md)
-- [Trd](./TRD.md)
-- [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)
+- [Observability](./OBSERVABILITY.md)
+- [Logging](./LOGGING.md)
+- [Self-Reflection](./SELF_REFLECTION.md)
+- [Agent Communication](./AGENT_COMMUNICATION.md)

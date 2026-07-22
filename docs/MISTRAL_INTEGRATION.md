@@ -1,88 +1,115 @@
 # Mistral Integration
 
-> Specification for the Mistral Integration subsystem of the AI Development Operating System. This document is normative — implementations MUST satisfy every MUST clause below.
+> Provider adapter implementation guide for the Mistral AI API. Extends [Model Providers](./MODEL_PROVIDERS.md) with Mistral-specific configuration, streaming, embeddings, function calling, and JSON mode.
 
 ## Overview
 
-Mistral Integration is a first-class subsystem of the AI Development Operating System (AI Dev OS). It participates in the Kernel's intake → plan → route → execute → critique → merge → guard → deliver loop and communicates exclusively through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md). This document defines its purpose, contracts, invariants, and failure modes so that AI agents can reason about it without inspecting any implementation.
+The Mistral adapter connects the Nine Router to Mistral's OpenAI-compatible API. Mistral uses the same `/v1/chat/completions` endpoint and SSE streaming as OpenAI. The adapter supports chat completions, embeddings, function calling, and JSON mode.
 
-## Goals
+## Endpoint Configuration
 
-- Provide an authoritative, unambiguous specification for this subsystem.
-- Define contracts, invariants, and acceptance criteria consumed by AI agents.
-- Stay small enough to review, large enough to remove ambiguity.
-
-## Non-Goals
-
-- Implementation code — this repository is documentation-only (see [AI Coding Rules](./AI_CODING_RULES.md)).
-- Vendor-specific tuning beyond what [Model Providers](./MODEL_PROVIDERS.md) allows.
-- Duplicating contracts that belong to another subsystem; link instead.
-
-## Requirements
-
-- **MUST** be consumable by both humans and AI agents.
-- **MUST** publish every state change to the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md).
-- **MUST** pass every rule enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
-- **MUST** be observable through the metrics defined in [Observability](./OBSERVABILITY.md).
-- **SHOULD** degrade gracefully rather than fail hard.
-- **MAY** be extended via the [Plugin SDK](./PLUGIN_SDK.md) when the extension point is declared here.
-
-## Architecture
-
-```mermaid
-flowchart LR
-  IN([Input]) --> SUB[Mistral Integration]
-  SUB --> CTX[(Shared Context Engine)]
-  SUB --> GUARD{Architecture Guardian}
-  GUARD -->|ok| OUT([Output])
-  GUARD -->|veto| SUB
+```
+base_url: https://api.mistral.ai/v1
+auth:     Authorization: Bearer ${MISTRAL_API_KEY}
 ```
 
-The subsystem is stateless at the process boundary; all durable state lives in the [Persistent Memory](./PERSISTENT_MEMORY.md) tier and is projected on demand.
+```yaml
+providers:
+  mistral:
+    api_key: ${MISTRAL_API_KEY}     # resolved via Secrets Management
+    base_url: https://api.mistral.ai/v1
+```
 
-## Interfaces
+API keys are provisioned from the [Mistral AI Platform](https://console.mistral.ai/).
 
-- See related subsystems for the concrete API surface this document constrains.
+## Models
 
-All interfaces follow the envelope defined in [Agent Communication](./AGENT_COMMUNICATION.md) and the error contract defined in [API Spec](./API_SPEC.md).
+| Model ID | Context | Max output | Pricing (input / output per MTok) | Capabilities |
+|----------|---------|-----------|-----------------------------------|--------------|
+| `mistral-large-2503` | 128K | 4,096 | $2.00 / $6.00 | Text, function calling, JSON mode |
+| `mistral-small-2503` | 32K | 4,096 | $0.10 / $0.30 | Text, function calling, JSON mode |
+| `codestral-2505` | 256K | 8,192 | $0.30 / $0.90 | Code gen, FIM, function calling |
+| `ministral-3b-2503` | 32K | 4,096 | $0.04 / $0.04 | Lightweight edge inference |
 
-## Data Model
+Free-tier models (`open-mistral-7b`, `open-mixtral-8x7b`) are available for experimentation.
 
-- Entities and fields are declared in the referenced subsystems and in [DATABASE](./DATABASE.md).
+## Chat Completions
 
-Retention and encryption rules are inherited from [Data Retention](./DATA_RETENTION.md) and [Encryption](./ENCRYPTION.md).
+Request format follows OpenAI's schema:
 
-## Failure Modes
+```
+POST /v1/chat/completions
+{ "model": "mistral-large-2503", "messages": [...], "stream": true }
+```
 
-- Every failure surfaces through the Shared Context Engine and the audit log.
-- Degradation is preferred over hard failure whenever safety permits.
+SSE events follow OpenAI conventions:
 
-Every failure emits a structured event on the Shared Context Engine and is recorded in the [Audit Log](./AUDIT_LOG.md).
+```
+data: {"choices":[{"index":0,"delta":{"content":"Here"},"finish_reason":null}]}
+data: {"choices":[{"index":0,"delta":{"content":" is"},"finish_reason":null}]}
+data: [DONE]
+```
 
-## Security Considerations
+The adapter **MUST** parse `data:` lines, extract `choices[0].delta.content`, and emit `ChatChunk { type: "token", delta }` per content chunk. On `finish_reason`, emit `ChatChunk { type: "finish" }`. Mistral does not include usage in streamed chunks — estimate via token counting.
 
-- Trust boundary: crosses only through signed envelopes (see [Security Model](./SECURITY_MODEL.md)).
-- Secrets are read from [Secrets Management](./SECRETS_MANAGEMENT.md); never inlined.
-- All external calls go through [Model Providers](./MODEL_PROVIDERS.md) or the [Plugin SDK](./PLUGIN_SDK.md) — no ad-hoc network access.
+## Embeddings API
 
-## Observability
+```
+POST /v1/embeddings
+{ "model": "mistral-embed", "input": ["Text to embed"] }
+```
 
-- Metrics, traces, and logs conform to [Observability](./OBSERVABILITY.md), [Tracing](./TRACING.md), and [Logging](./LOGGING.md).
-- Every run carries a `correlation_id` propagated from the Kernel.
+Response: `{ data: [{ index, embedding: float[] }] }`. Supports batched input (up to 32). Produces 1024-dimensional embeddings.
 
-## Acceptance Criteria
+## Function Calling
 
-- The contracts above are testable via the [Eval Harness](./EVAL_HARNESS.md).
-- A change to this document requires a matching update to any dependent doc listed in *Related Documents*.
+Mistral supports the OpenAI function calling schema:
 
-## Open Questions
+```json
+{
+  "tools": [{
+    "type": "function",
+    "function": { "name": "get_weather", "parameters": { ... } }
+  }],
+  "tool_choice": "auto"
+}
+```
 
-- _Track open questions as ADRs under [templates/ADR](../templates/ADR.md)._
+Tool calls appear in `choices[0].delta.tool_calls`. The adapter **MUST** accumulate by `index` and emit complete `ChatChunk { type: "tool_call" }` only on `finish_reason: "tool_calls"`.
+
+## JSON Mode
+
+Set `response_format: { type: "json_object" }` to constrain output to valid JSON. The adapter **MUST** validate JSON parseability after `[DONE]`.
+
+## Rate Limits
+
+| Tier | Requests/min | Tokens/min |
+|------|-------------|------------|
+| Free | 30 | 500,000 |
+| Pro | 500 | 2,000,000 |
+| Business | 2,000 | 10,000,000 |
+
+Parse `x-ratelimit-remaining-*` headers. Mistral returns `Retry-After` in seconds on 429.
+
+## Error Codes
+
+| HTTP | Code | Adapter action |
+|------|------|----------------|
+| 400 | `bad_request` | Surface validation error |
+| 401 | `unauthorized` | Mark `auth_error` |
+| 403 | `forbidden` | Mark `auth_error` |
+| 404 | `not_found` | Trigger re-discovery |
+| 429 | `too_many_requests` | Backoff; mark `rate_limited` |
+| 429 | `quota_exceeded` | Mark `quota_exceeded`; billing alert |
+| 5xx | Server error | Retry × 3; mark `degraded` |
 
 ## Related Documents
 
-- [System Overview](./SYSTEM_OVERVIEW.md)
-- [Main Ai Kernel](./MAIN_AI_KERNEL.md)
-- [Prd](./PRD.md)
-- [Trd](./TRD.md)
-- [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)
+- [Model Providers](./MODEL_PROVIDERS.md)
+- [Nine Router](./NINE_ROUTER.md)
+- [Cost Management](./COST_MANAGEMENT.md)
+- [Model Discovery](./MODEL_DISCOVERY.md)
+- [Secrets Management](./SECRETS_MANAGEMENT.md)
+- [Streaming Responses](./STREAMING_RESPONSES.md)
+- [Tool Calling](./TOOL_CALLING.md)
+- [Local Models](./LOCAL_MODELS.md)

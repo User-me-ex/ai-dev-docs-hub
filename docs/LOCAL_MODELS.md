@@ -1,88 +1,106 @@
 # Local Models
 
-> Specification for the Local Models subsystem of the AI Development Operating System. This document is normative — implementations MUST satisfy every MUST clause below.
+> Guide to setting up, configuring, and managing local model inference for AI Dev OS. Covers supported engines, model downloading, performance tuning, and troubleshooting.
 
 ## Overview
 
-Local Models is a first-class subsystem of the AI Development Operating System (AI Dev OS). It participates in the Kernel's intake → plan → route → execute → critique → merge → guard → deliver loop and communicates exclusively through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md). This document defines its purpose, contracts, invariants, and failure modes so that AI agents can reason about it without inspecting any implementation.
+Local models provide zero-cost inference with no external API dependencies, full data privacy, and offline capability. AI Dev OS supports three local engines:
 
-## Goals
+| Engine | Platform | Format | GPU Support |
+|--------|----------|--------|-------------|
+| **Ollama** | Linux, macOS, Windows | GGUF | CUDA, Vulkan, Metal |
+| **llama.cpp** | Linux, macOS, Windows | GGUF | CUDA, Vulkan, Metal, SYCL |
+| **MLX** | macOS (Apple Silicon) | safetensors | Metal (M1–M4) |
 
-- Provide an authoritative, unambiguous specification for this subsystem.
-- Define contracts, invariants, and acceptance criteria consumed by AI agents.
-- Stay small enough to review, large enough to remove ambiguity.
+Ollama is the recommended default. llama.cpp is for advanced GPU tuning. MLX is for Apple Silicon only.
 
-## Non-Goals
+## Setup
 
-- Implementation code — this repository is documentation-only (see [AI Coding Rules](./AI_CODING_RULES.md)).
-- Vendor-specific tuning beyond what [Model Providers](./MODEL_PROVIDERS.md) allows.
-- Duplicating contracts that belong to another subsystem; link instead.
-
-## Requirements
-
-- **MUST** be consumable by both humans and AI agents.
-- **MUST** publish every state change to the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md).
-- **MUST** pass every rule enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
-- **MUST** be observable through the metrics defined in [Observability](./OBSERVABILITY.md).
-- **SHOULD** degrade gracefully rather than fail hard.
-- **MAY** be extended via the [Plugin SDK](./PLUGIN_SDK.md) when the extension point is declared here.
-
-## Architecture
-
-```mermaid
-flowchart LR
-  IN([Input]) --> SUB[Local Models]
-  SUB --> CTX[(Shared Context Engine)]
-  SUB --> GUARD{Architecture Guardian}
-  GUARD -->|ok| OUT([Output])
-  GUARD -->|veto| SUB
+### Ollama
+```
+curl -fsSL https://ollama.com/install.sh | sh    # Linux/macOS
+# Windows: download from https://ollama.com/download/windows
+ollama --version
+```
+```yaml
+providers: { ollama: { base_url: http://127.0.0.1:11434, default_keep_alive: 5m, auto_pull: false } }
 ```
 
-The subsystem is stateless at the process boundary; all durable state lives in the [Persistent Memory](./PERSISTENT_MEMORY.md) tier and is projected on demand.
+### llama.cpp
+```
+git clone https://github.com/ggml-org/llama.cpp && cd llama.cpp
+cmake -B build -DGGML_CUDA=ON && cmake --build build --config Release -j
+./build/bin/llama-server -m model.gguf --host 127.0.0.1 --port 8080
+```
+```yaml
+providers: { llamacpp: { base_url: http://127.0.0.1:8080 } }
+```
 
-## Interfaces
+### MLX
+```
+pip install mlx-lm && mlx_lm.server --model mlx-community/Qwen2.5-7B-4bit --port 8080
+```
+```yaml
+providers: { mlx: { base_url: http://127.0.0.1:8080 } }
+```
 
-- See related subsystems for the concrete API surface this document constrains.
+## Model Downloading
 
-All interfaces follow the envelope defined in [Agent Communication](./AGENT_COMMUNICATION.md) and the error contract defined in [API Spec](./API_SPEC.md).
+| Engine | Command |
+|--------|---------|
+| Ollama | `ollama pull <name>` (e.g., `ollama pull llama3.2:3b`) |
+| llama.cpp | Download .gguf from Hugging Face |
+| MLX | Pre-converted models on Hugging Face (`mlx-community`) |
 
-## Data Model
+Set `auto_pull: true` to auto-fetch missing models.
 
-- Entities and fields are declared in the referenced subsystems and in [DATABASE](./DATABASE.md).
+## Configuration
 
-Retention and encryption rules are inherited from [Data Retention](./DATA_RETENTION.md) and [Encryption](./ENCRYPTION.md).
+| Engine | Context param | GPU param | Thread param |
+|--------|--------------|-----------|-------------|
+| Ollama | `num_ctx` (default 2048) | `OLLAMA_NUM_PARALLEL` | `num_thread` (auto) |
+| llama.cpp | `ctx_size` (default 512) | `-ngl N` | `-t N` |
+| MLX | `max_tokens` (default 2048) | Automatic (always Metal) | N/A |
 
-## Failure Modes
+Recommended `num_ctx`: 4096–8192. For llama.cpp, `-ngl 99` offloads all layers to GPU.
 
-- Every failure surfaces through the Shared Context Engine and the audit log.
-- Degradation is preferred over hard failure whenever safety permits.
+## Performance Tuning
 
-Every failure emits a structured event on the Shared Context Engine and is recorded in the [Audit Log](./AUDIT_LOG.md).
+| Quant | Size vs FP16 | Quality | When to use |
+|-------|-------------|---------|-------------|
+| FP16 | 1× | Baseline | 24 GB+ VRAM |
+| Q8_0 | 0.5× | Negligible | Best for 7B on 12 GB |
+| Q4_K_M | 0.27× | Low loss | Default |
+| Q3_K_M | 0.20× | Moderate | Large models on limited VRAM |
+| Q2_K | 0.15× | Significant | Last resort |
 
-## Security Considerations
+Choose the highest quantization fitting entirely in VRAM. 8 GB → Q4_K_M for 7B. 24 GB → Q8_0 for 7B.
 
-- Trust boundary: crosses only through signed envelopes (see [Security Model](./SECURITY_MODEL.md)).
-- Secrets are read from [Secrets Management](./SECRETS_MANAGEMENT.md); never inlined.
-- All external calls go through [Model Providers](./MODEL_PROVIDERS.md) or the [Plugin SDK](./PLUGIN_SDK.md) — no ad-hoc network access.
+## Health Checks
 
-## Observability
+| Engine | Endpoint | Success |
+|--------|----------|---------|
+| Ollama | `GET /api/version` | `{ "version": "0.5.x" }` |
+| llama.cpp | `GET /v1/models` | `{ "object": "list" }` |
+| MLX | `GET /v1/models` | `{ "object": "list" }` |
 
-- Metrics, traces, and logs conform to [Observability](./OBSERVABILITY.md), [Tracing](./TRACING.md), and [Logging](./LOGGING.md).
-- Every run carries a `correlation_id` propagated from the Kernel.
+Adapters poll every 30 s and publish state transitions to the SCE.
 
-## Acceptance Criteria
+## Troubleshooting
 
-- The contracts above are testable via the [Eval Harness](./EVAL_HARNESS.md).
-- A change to this document requires a matching update to any dependent doc listed in *Related Documents*.
-
-## Open Questions
-
-- _Track open questions as ADRs under [templates/ADR](../templates/ADR.md)._
+| Symptom | Cause | Solution |
+|---------|-------|----------|
+| OOM | Model too large for VRAM | Lower quantization or smaller model |
+| < 5 tok/s | Too few GPU layers | Increase `-ngl` |
+| Repetitive output | Temperature too low | Increase to 0.7–0.9 |
+| Incoherent output | Excessive quantization | Use Q4_K_M or higher |
+| Model reloading per request | No keep-alive | Set `keep_alive: 5m` (Ollama) |
 
 ## Related Documents
+- [Model Providers](./MODEL_PROVIDERS.md)
+- [Ollama Integration](./OLLAMA_INTEGRATION.md)
+- [Performance](./PERFORMANCE.md)
+- [Installation](./INSTALLATION.md)
+- [Model Discovery](./MODEL_DISCOVERY.md)
+- [Cost Management](./COST_MANAGEMENT.md)
 
-- [System Overview](./SYSTEM_OVERVIEW.md)
-- [Main Ai Kernel](./MAIN_AI_KERNEL.md)
-- [Prd](./PRD.md)
-- [Trd](./TRD.md)
-- [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)

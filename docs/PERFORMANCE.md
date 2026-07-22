@@ -1,88 +1,118 @@
 # Performance
 
-> Specification for the Performance subsystem of the AI Development Operating System. This document is normative — implementations MUST satisfy every MUST clause below.
+> Performance characteristics, targets, and optimization strategies for AI Dev OS.
 
 ## Overview
 
-Performance is a first-class subsystem of the AI Development Operating System (AI Dev OS). It participates in the Kernel's intake → plan → route → execute → critique → merge → guard → deliver loop and communicates exclusively through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md). This document defines its purpose, contracts, invariants, and failure modes so that AI agents can reason about it without inspecting any implementation.
+This document defines the performance budget for AI Dev OS — the latency, throughput, and resource utilization targets every subsystem MUST meet. Performance is monitored continuously via the [Observability](./OBSERVABILITY.md) pipeline and enforced as part of the CI gate (see [Testing Strategy](./TESTING_STRATEGY.md)).
 
-## Goals
+## Performance Targets
 
-- Provide an authoritative, unambiguous specification for this subsystem.
-- Define contracts, invariants, and acceptance criteria consumed by AI agents.
-- Stay small enough to review, large enough to remove ambiguity.
+| Component | Metric | Target | Measurement |
+|---|---|---|---|
+| Kernel loop | p99 latency | < 5 s | Full intake → deliver cycle |
+| SCE publish | p99 latency | < 5 ms | Single event, in-process |
+| SCE subscribe | p99 delivery | < 10 ms | First subscriber receives event |
+| Memory query | p95 latency | < 100 ms | Hybrid vector + metadata, 10 K index |
+| Vector index build | time per 10 K embeddings | < 30 s | HNSW, efConstruction=200 |
+| Guardian check | p95 latency | < 500 ms | Full rule set against run context |
+| Model API call | p95 time to first token | < 2 s | Excludes provider network latency |
+| Worker spawn | p99 cold start | < 3 s | Containerized worker, image cached |
+| Graph traversal | p99 10-hop BFS | < 200 ms | 100 K node graph |
+| File I/O (config) | p99 read | < 10 ms | TOML/YAML parse into memory |
+| SQLite query | p99 simple SELECT | < 5 ms | Indexed, < 1 K rows returned |
 
-## Non-Goals
+## Bottleneck Analysis
 
-- Implementation code — this repository is documentation-only (see [AI Coding Rules](./AI_CODING_RULES.md)).
-- Vendor-specific tuning beyond what [Model Providers](./MODEL_PROVIDERS.md) allows.
-- Duplicating contracts that belong to another subsystem; link instead.
+Identified bottleneck sources and their impact:
 
-## Requirements
+| Bottleneck | Impact | Frequency |
+|---|---|---|
+| SCE write throughput | Limits multi-agent event throughput | Under high concurrency |
+| Vector index rebuild | Blocks memory queries during rebuild | On model catalog changes |
+| Model API latency | Dominates total run time | Every run |
+| Filesystem I/O (metadata) | Slows startup and config reload | On cold start |
+| SQLite write lock | Contention under concurrent writes | Multi-worker sessions |
+| Serialization overhead | JSON serialize/deserialize of large contexts | Large SCE events |
 
-- **MUST** be consumable by both humans and AI agents.
-- **MUST** publish every state change to the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md).
-- **MUST** pass every rule enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
-- **MUST** be observable through the metrics defined in [Observability](./OBSERVABILITY.md).
-- **SHOULD** degrade gracefully rather than fail hard.
-- **MAY** be extended via the [Plugin SDK](./PLUGIN_SDK.md) when the extension point is declared here.
+## Optimization Strategies
 
-## Architecture
+| Strategy | Applied To | Effect |
+|---|---|---|
+| In-memory LRU cache | Model catalog, KB queries, SCE snapshots | Avoids redundant I/O and recomputation |
+| Connection pooling | Model provider HTTP clients | Reduces TLS handshake overhead |
+| Async batched writes | SCE events, audit log, metrics | Groups small writes into batch commits |
+| Batch vector operations | Embedding insert, index build | Reduces per-vector overhead |
+| SQLite WAL mode | Persistent memory, audit log | Concurrent reads during write |
+| HNSW index tuning | Vector store | `efConstruction` / `efSearch` tradeoff |
+| Response streaming | Model inference | Lowers time-to-first-token |
+| Pre-warming | Model catalog, plugin registry | Eliminates cold-start penalty |
 
-```mermaid
-flowchart LR
-  IN([Input]) --> SUB[Performance]
-  SUB --> CTX[(Shared Context Engine)]
-  SUB --> GUARD{Architecture Guardian}
-  GUARD -->|ok| OUT([Output])
-  GUARD -->|veto| SUB
+## Profiling
+
+Built-in profiling is available via the CLI:
+
+```bash
+aidevos doctor --profile              # run profile and print summary
+aidevos doctor --profile --flamegraph  # generate flamegraph SVG
+aidevos doctor --profile --output profile.json  # raw trace data
 ```
 
-The subsystem is stateless at the process boundary; all durable state lives in the [Persistent Memory](./PERSISTENT_MEMORY.md) tier and is projected on demand.
+Profiling runs the Kernel loop and all subsystem entry points on a synthetic workload. Results include per-function CPU time, call count, and allocation size.
 
-## Interfaces
+Flamegraphs are written to `~/.aidevos/profiles/` and can be viewed in any browser.
 
-- See related subsystems for the concrete API surface this document constrains.
+## Memory Usage
 
-All interfaces follow the envelope defined in [Agent Communication](./AGENT_COMMUNICATION.md) and the error contract defined in [API Spec](./API_SPEC.md).
+| Component | Typical Footprint | Notes |
+|---|---|---|
+| Main Kernel process | 150–300 MB | Includes SCE, scheduler, router |
+| Worker process (each) | 80–200 MB | Per-agent session memory |
+| SQLite (persistent store) | File-size + 32 MB WAL | Scales with KB size |
+| Vector index (10 K embeddings) | ~40 MB | HNSW, 768-dim, float32 |
+| Vector index (100 K embeddings) | ~400 MB | Same parameters |
+| Plugin host process | 50–150 MB | Per loaded plugin |
 
-## Data Model
+## GPU Utilization
 
-- Entities and fields are declared in the referenced subsystems and in [DATABASE](./DATABASE.md).
+| Workload | GPU Memory | Notes |
+|---|---|---|
+| Model inference (7B param) | 14–18 GB | Half-precision, batch=1 |
+| Model inference (70B param) | 40–80 GB | Requires quantization or multi-GPU |
+| Embedding generation (batch 32) | 2–4 GB | BERT-family, 768-dim |
+| Vector index (HNSW build) | CPU only | GPU not used |
 
-Retention and encryption rules are inherited from [Data Retention](./DATA_RETENTION.md) and [Encryption](./ENCRYPTION.md).
+GPU memory is allocated lazily. Use `--gpu` flags on per-command basis to control which operations use the GPU. See [Model Providers](./MODEL_PROVIDERS.md) for provider-specific GPU configuration.
 
-## Failure Modes
+## Optimization Workflow
 
-- Every failure surfaces through the Shared Context Engine and the audit log.
-- Degradation is preferred over hard failure whenever safety permits.
+The recommended workflow for performance optimization follows a measure → identify → optimize → verify loop:
 
-Every failure emits a structured event on the Shared Context Engine and is recorded in the [Audit Log](./AUDIT_LOG.md).
+1. **Measure**: Run `aidevos doctor --profile` against a representative workload to establish baseline.
+2. **Identify**: Examine the profile output for the top-5 bottlenecks by CPU time or wall-clock time. Compare against the performance targets table above.
+3. **Optimize**: Apply one strategy from the optimization table (caching, batching, pooling, index tuning). Avoid making multiple changes simultaneously.
+4. **Verify**: Re-run the profile and diff against the baseline with `aidevos doctor --profile --diff <baseline.json>`.
+5. **Gate**: Ensure all MUST targets still pass before committing.
 
-## Security Considerations
+Regressions that exceed 10% on any MUST target require a documented trade-off approved by the performance team lead.
 
-- Trust boundary: crosses only through signed envelopes (see [Security Model](./SECURITY_MODEL.md)).
-- Secrets are read from [Secrets Management](./SECRETS_MANAGEMENT.md); never inlined.
-- All external calls go through [Model Providers](./MODEL_PROVIDERS.md) or the [Plugin SDK](./PLUGIN_SDK.md) — no ad-hoc network access.
+## Scalability Bottlenecks
 
-## Observability
+When scaling from single-user to multi-workspace deployments, watch for these bottlenecks:
 
-- Metrics, traces, and logs conform to [Observability](./OBSERVABILITY.md), [Tracing](./TRACING.md), and [Logging](./LOGGING.md).
-- Every run carries a `correlation_id` propagated from the Kernel.
-
-## Acceptance Criteria
-
-- The contracts above are testable via the [Eval Harness](./EVAL_HARNESS.md).
-- A change to this document requires a matching update to any dependent doc listed in *Related Documents*.
-
-## Open Questions
-
-- _Track open questions as ADRs under [templates/ADR](../templates/ADR.md)._
+| Bottleneck | Signs | Remedy |
+|---|---|---|
+| SQLite write contention | `SQLITE_BUSY` errors in logs | Switch to PostgreSQL for persistent memory |
+| SCE event ordering | Out-of-order delivery under load | Enable partitioned topics per workspace |
+| Model API rate limits | 429 responses increase with worker count | Distribute across provider API keys |
+| Cache churn | Cache miss rate > 30% | Increase cache sizes or add Redis backend |
+| Worker startup time | Cold start > 10 s | Pre-pull container images, use worker pools |
 
 ## Related Documents
 
-- [System Overview](./SYSTEM_OVERVIEW.md)
-- [Main Ai Kernel](./MAIN_AI_KERNEL.md)
-- [Prd](./PRD.md)
-- [Trd](./TRD.md)
-- [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)
+- [Benchmarks](./BENCHMARKS.md) — benchmarking framework and results
+- [Scalability](./SCALABILITY.md) — horizontal scaling and throughput
+- [Caching Strategy](./CACHING_STRATEGY.md) — caching layers and invalidation
+- [Reliability](./RELIABILITY.md) — fault tolerance and degradation
+- [Observability](./OBSERVABILITY.md) — metrics collection and dashboards
+- [Tracing](./TRACING.md) — distributed trace propagation

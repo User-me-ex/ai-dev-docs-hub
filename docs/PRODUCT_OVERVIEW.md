@@ -1,22 +1,86 @@
 # Product Overview
 
-> Specification for the Product Overview subsystem of the AI Development Operating System. This document is normative — implementations MUST satisfy every MUST clause below.
+> Comprehensive product description of AI Dev OS — the AI development operating system for multi-agent coding. This document is normative — implementations MUST satisfy every MUST clause below.
 
 ## Overview
 
-Product Overview is a first-class subsystem of the AI Development Operating System (AI Dev OS). It participates in the Kernel's intake → plan → route → execute → critique → merge → guard → deliver loop and communicates exclusively through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md). This document defines its purpose, contracts, invariants, and failure modes so that AI agents can reason about it without inspecting any implementation.
+AI Dev OS is an open-source development operating system that orchestrates multiple AI agents to solve complex software engineering tasks. Unlike single-model coding assistants (Cursor, Copilot) or end-to-end coding agents (Devin, SWE-agent), AI Dev OS is a **platform for running coordinated multi-agent systems** where specialised agents — the Kernel, Planner, Router, Researcher, Builder, Critic, Merger, Guardian, and Voice — collaborate through a deterministic loop to produce production-quality code.
 
-## Goals
+The system is **local-first**, **model-agnostic**, and **observability-built-in**. Everything flows through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md); no hidden state exists. Every decision, every event, every artifact is recorded, traceable, and auditable.
 
-- Provide an authoritative, unambiguous specification for this subsystem.
-- Define contracts, invariants, and acceptance criteria consumed by AI agents.
-- Stay small enough to review, large enough to remove ambiguity.
+## What AI Dev OS Solves
 
-## Non-Goals
+| Problem | How AI Dev OS Solves It |
+|---------|------------------------|
+| **Complex multi-step tasks** | The Planning Engine decomposes goals into a DAG of tasks executed in topological order |
+| **Parallel agent coordination** | Multi-Agent Orchestration dispatches independent tasks to concurrent workers |
+| **Knowledge persistence across sessions** | The Knowledge System (Main KB, Group KB, Individual KB, Global KB) preserves context |
+| **Model selection complexity** | The Nine Router + Model Routing Policy pick the best model per role |
+| **Quality and safety** | The Critic reviews all output; the Architecture Guardian enforces invariants before delivery |
+| **Observability and debugging** | Every event is published to the SCE; traces, metrics, and logs follow OpenTelemetry |
+| **Multi-provider flexibility** | Model Providers abstraction supports OpenAI, Anthropic, Google, Mistral, Ollama, llama.cpp, MCP |
+| **Vendor lock-in avoidance** | Model-agnostic policy means you can swap models per role without changing workflow |
 
-- Implementation code — this repository is documentation-only (see [AI Coding Rules](./AI_CODING_RULES.md)).
-- Vendor-specific tuning beyond what [Model Providers](./MODEL_PROVIDERS.md) allows.
-- Duplicating contracts that belong to another subsystem; link instead.
+## Key Features
+
+| Feature | Description | Doc |
+|---------|-------------|-----|
+| **Main AI Kernel Loop** | Intake → Plan → Route → Execute → Critique → Merge → Guard → Deliver | [MAIN_AI_KERNEL.md](./MAIN_AI_KERNEL.md) |
+| **Nine Router** | Model discovery, role assignment, fallback chains | [NINE_ROUTER.md](./NINE_ROUTER.md) |
+| **Model Routing Policy** | Capability-first deterministic model selection | [MODEL_ROUTING_POLICY.md](./MODEL_ROUTING_POLICY.md) |
+| **AI Groups** | Logical agent teams with shared context | [AI_GROUPS.md](./AI_GROUPS.md) |
+| **Knowledge System** | Persistent YAML-based knowledge across runs | [KNOWLEDGE_SYSTEM.md](./KNOWLEDGE_SYSTEM.md) |
+| **Research Engine** | Web search, retrieval, synthesis | [RESEARCH_ENGINE.md](./RESEARCH_ENGINE.md) |
+| **Architecture Guardian** | Rule-based invariant enforcement | [ARCHITECTURE_GUARDIAN.md](./ARCHITECTURE_GUARDIAN.md) |
+| **Merge Manager** | Concurrent edit reconciliation | [MERGE_MANAGER.md](./MERGE_MANAGER.md) |
+| **Dynamic Workers** | On-demand agent workers per task | [DYNAMIC_WORKERS.md](./DYNAMIC_WORKERS.md) |
+| **Shared Context Engine** | Central event bus and state projection | [SHARED_CONTEXT_ENGINE.md](./SHARED_CONTEXT_ENGINE.md) |
+| **Cost Management** | Token and cost tracking per run | [COST_MANAGEMENT.md](./COST_MANAGEMENT.md) |
+| **Observability** | OpenTelemetry metrics, traces, logs | [OBSERVABILITY.md](./OBSERVABILITY.md) |
+
+## User Personas
+
+| Persona | Use Case | Key Subsystems |
+|---------|----------|----------------|
+| **Solo developer** | Generate, refactor, review code autonomously | Kernel, Builder, Critic, Knowledge System |
+| **Engineering team** | Parallel code generation, multi-file refactoring, code review | AI Groups, Merge Manager, Merger, Guardian |
+| **Open source maintainer** | Automated PR triage, code review, documentation | Research Engine, Critic, Planning Engine |
+| **Platform builder** | Building custom tools on top of AI Dev OS | Plugin SDK, MCP, Model Providers, Nine Router |
+
+## Use Cases
+
+| Use Case | Description |
+|----------|-------------|
+| Code generation | Translate feature specs into production code across multiple files |
+| Refactoring | Structural code changes with consistent patterns across the codebase |
+| Documentation | Generate, update, and maintain documentation from code analysis |
+| Research | Investigate APIs, libraries, or domains; synthesise findings into plans |
+| Code review | Multi-perspective review (Critic) + invariant enforcement (Guardian) |
+| Debugging | Isolate root causes, propose fixes, validate with tests |
+| CI automation | Automated PR review, test generation, changelog updates |
+
+## Differentiation from Alternatives
+
+| Dimension | AI Dev OS | Cursor / Copilot | Devin | SWE-agent |
+|-----------|-----------|------------------|-------|-----------|
+| Architecture | Multi-agent loop | Single-model chat | Single-agent sandbox | Single-agent CLI |
+| Model flexibility | Any model per role (9 roles) | Vendor-locked (OpenAI) | Vendor-locked | OpenAI-only |
+| Knowledge | YAML KB per scope (workspace, project, group, individual) | Project index only | Session-only | None |
+| Observability | Full OTel traces, metrics, audit log | Minimal | Black box | Minimal |
+| Multi-agent | Native (9 roles, AI Groups) | None | None | None |
+| Governance | Guardian with declarative rules | None | None | None |
+| Cost control | Per-role model selection, fallback chains | Single-model per session | Fixed | Single-model |
+| Local-first | Yes (Ollama, llama.cpp, MLX) | No (cloud-only) | No (cloud-only) | No (cloud-only) |
+
+## Architecture Philosophy
+
+1. **Local-first**: The system runs entirely on your machine. Cloud models are optional. All state is local unless explicitly synced.
+2. **Spec-before-code**: Every subsystem is documented before it is implemented. Documentation is normative — it defines the contracts AI agents reason about.
+3. **Observability-built-in**: Metrics, traces, and logs are not retrofitted; they are emitted by every subsystem at every stage. The SCE is the single source of truth.
+4. **No hidden state**: Every mutation flows through the SCE. There is no in-memory state that cannot be reconstructed from events.
+5. **Replaceable subsystems**: Every subsystem has a defined interface. You can swap the Planner, change the Router, or replace the Guardian — as long as the interface contract is satisfied.
+6. **Model-agnostic**: No model-specific optimisations in core code. Model-specific behaviour lives in Model Provider adapters.
+7. **Versioned everything**: Policy documents, plans, graphs, and knowledge are versioned. Immutable snapshots enable reproducibility.
 
 ## Requirements
 
@@ -24,65 +88,112 @@ Product Overview is a first-class subsystem of the AI Development Operating Syst
 - **MUST** publish every state change to the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md).
 - **MUST** pass every rule enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
 - **MUST** be observable through the metrics defined in [Observability](./OBSERVABILITY.md).
-- **SHOULD** degrade gracefully rather than fail hard.
-- **MAY** be extended via the [Plugin SDK](./PLUGIN_SDK.md) when the extension point is declared here.
+- **MUST** provide a Getting Started path that works without any cloud provider API key.
+- **SHOULD** support the full loop with only local models (Ollama or llama.cpp).
+- **SHOULD** support progressive disclosure — simple tasks should work with minimal configuration.
+- **MAY** expose all functionality through both CLI and programmatic API.
+
+## How the Loop Works End-to-End
+
+```
+User runs: aidevos run "Add input validation to the login form"
+
+1. Intake:    Kernel receives goal, validates format, enriches with KB context
+2. Plan:      Planning Engine decomposes into [Researcher→Builder→Critic→Merger]
+3. Route:     Nine Router binds Builder → gpt-4o, Critic → claude-opus-4, etc.
+4. Execute:   Workers run tasks in parallel where possible
+5. Critique:  Critic reviews each output; flags missing edge cases
+6. Replan:    Kernel re-plans the rejected branch (max 5 attempts)
+7. Merge:     Merge Manager reconciles concurrent file edits
+8. Guard:     Architecture Guardian checks no secrets leaked, no hidden state
+9. Deliver:   Kernel writes the validated changes to filesystem
+```
 
 ## Architecture
 
 ```mermaid
-flowchart LR
-  IN([Input]) --> SUB[Product Overview]
-  SUB --> CTX[(Shared Context Engine)]
-  SUB --> GUARD{Architecture Guardian}
-  GUARD -->|ok| OUT([Output])
-  GUARD -->|veto| SUB
+flowchart TB
+  subgraph "AI Dev OS Product"
+    USER([Developer]) --> CLI[CLI: aidevos]
+    CLI --> KERNEL[Main AI Kernel]
+
+    KERNEL --> PLAN[Planning Engine]
+    PLAN --> ROUTER[Nine Router]
+    ROUTER --> WORKERS[Dynamic Workers]
+    WORKERS --> CRITIC[Critic]
+    CRITIC --> MERGE[Merge Manager]
+    MERGE --> GUARD[Architecture Guardian]
+    GUARD --> RESULT[Delivered Artifact]
+
+    subgraph "Persistence Layer"
+      KB[(Knowledge System\nYAML KBs)]
+      PMEM[(Persistent Memory)]
+      SCE[(Shared Context Engine)]
+    end
+
+    KERNEL <--> SCE
+    KERNEL <--> KB
+    WORKERS <--> PMEM
+
+    subgraph "Model Layer"
+      MPR[Model Providers]
+      LOCAL[Local: Ollama, llama.cpp, MLX]
+      CLOUD[Cloud: OpenAI, Anthropic, Google, Mistral]
+    end
+
+    ROUTER --> MPR
+    MPR --> LOCAL
+    MPR --> CLOUD
+  end
 ```
 
-The subsystem is stateless at the process boundary; all durable state lives in the [Persistent Memory](./PERSISTENT_MEMORY.md) tier and is projected on demand.
+## Deployment Options
 
-## Interfaces
+| Mode | Description | Configuration |
+|------|-------------|---------------|
+| **Local only** | All models run locally via Ollama or llama.cpp | `AIDEVOS_MODELS=local` |
+| **Hybrid** | Cheap roles (Router, Guardian) use local; complex roles use cloud | Per-role policy in Nine Router |
+| **Cloud only** | All models use cloud providers | Provider API keys configured |
+| **Team server** | Shared AI Dev OS instance on a LAN server | Multi-process deployment |
+| **CI/CD** | Ephemeral runs in CI pipeline | Kubernetes / Docker |
 
-- See related subsystems for the concrete API surface this document constrains.
+## Security Model Highlights
 
-All interfaces follow the envelope defined in [Agent Communication](./AGENT_COMMUNICATION.md) and the error contract defined in [API Spec](./API_SPEC.md).
-
-## Data Model
-
-- Entities and fields are declared in the referenced subsystems and in [DATABASE](./DATABASE.md).
-
-Retention and encryption rules are inherited from [Data Retention](./DATA_RETENTION.md) and [Encryption](./ENCRYPTION.md).
+- All agent communication happens through signed envelopes over the SCE.
+- Credentials are never stored in agent memory; they are fetched from Secrets Management at call time.
+- The Architecture Guardian enforces least-privilege tool access per worker.
+- Every mutation is recorded in the immutable Audit Log.
+- See [Security Model](./SECURITY_MODEL.md) and [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
 
 ## Failure Modes
 
-- Every failure surfaces through the Shared Context Engine and the audit log.
-- Degradation is preferred over hard failure whenever safety permits.
+| Mode | Detection | Response |
+|------|-----------|----------|
+| No model available for a role | `policy.choose()` raises | Surface available models; suggest configuring a provider |
+| Cycle in task graph | `plan.validate()` detects | Reject plan; surface cycle edges to operator |
+| Critic rejection loop | Replan count > 5 | Mark run `failed`; escalate with full feedback history |
+| Provider outage | Worker gets HTTP 503 | Fall back to next model in chain; emit alert |
+| KB write conflict | Two agents write to same KB key | Last-writer-wins with audit trail; emit warning |
+| Guardian storm | ≥3 vetoes in 10s | Freeze non-critical routes; alert operator |
 
-Every failure emits a structured event on the Shared Context Engine and is recorded in the [Audit Log](./AUDIT_LOG.md).
+## Roadmap
 
-## Security Considerations
-
-- Trust boundary: crosses only through signed envelopes (see [Security Model](./SECURITY_MODEL.md)).
-- Secrets are read from [Secrets Management](./SECRETS_MANAGEMENT.md); never inlined.
-- All external calls go through [Model Providers](./MODEL_PROVIDERS.md) or the [Plugin SDK](./PLUGIN_SDK.md) — no ad-hoc network access.
-
-## Observability
-
-- Metrics, traces, and logs conform to [Observability](./OBSERVABILITY.md), [Tracing](./TRACING.md), and [Logging](./LOGGING.md).
-- Every run carries a `correlation_id` propagated from the Kernel.
+See [Implementation Roadmap](./IMPLEMENTATION_ROADMAP.md) for the detailed delivery timeline.
 
 ## Acceptance Criteria
 
-- The contracts above are testable via the [Eval Harness](./EVAL_HARNESS.md).
-- A change to this document requires a matching update to any dependent doc listed in *Related Documents*.
-
-## Open Questions
-
-- _Track open questions as ADRs under [templates/ADR](../templates/ADR.md)._
+- A fresh install with Ollama running and `aidevos run "hello world"` produces output without any cloud configuration.
+- Assigning 9 different models across the 9 roles is possible through the CLI in under 5 commands.
+- A run with 3 independent tasks completes in less time than the sum of the 3 individual task times (parallelism verified).
+- Disconnecting the network mid-run causes a graceful degradation: tasks with cloud models fail over to local fallbacks.
 
 ## Related Documents
 
-- [System Overview](./SYSTEM_OVERVIEW.md)
-- [Main Ai Kernel](./MAIN_AI_KERNEL.md)
-- [Prd](./PRD.md)
-- [Trd](./TRD.md)
-- [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)
+- [Project Vision](./PROJECT_VISION.md) — long-term vision
+- [PRD](./PRD.md) — product requirements
+- [System Overview](./SYSTEM_OVERVIEW.md) — architecture deep-dive
+- [Getting Started](./GETTING_STARTED.md) — how to start using AI Dev OS
+- [Installation](./INSTALLATION.md) — local setup
+- [CLI](./CLI.md) — command-line interface reference
+- [Main AI Kernel](./MAIN_AI_KERNEL.md) — the core loop
+- [Implementation Roadmap](./IMPLEMENTATION_ROADMAP.md) — planned features

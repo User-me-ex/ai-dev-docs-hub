@@ -1,88 +1,265 @@
 # Deployment
 
-> Specification for the Deployment subsystem of the AI Development Operating System. This document is normative — implementations MUST satisfy every MUST clause below.
+> Deployment topology, infrastructure, and operational procedures for the AI Dev OS runtime. This document is normative — implementations MUST satisfy every MUST clause below.
 
 ## Overview
 
-Deployment is a first-class subsystem of the AI Development Operating System (AI Dev OS). It participates in the Kernel's intake → plan → route → execute → critique → merge → guard → deliver loop and communicates exclusively through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md). This document defines its purpose, contracts, invariants, and failure modes so that AI agents can reason about it without inspecting any implementation.
+AI Dev OS is designed **local-first**: a single-machine installation runs the entire stack with SQLite and zero cloud dependencies. Two optional modes layer on Postgres, NATS, S3, and Kubernetes for teams that need shared state, multi-tenancy, or elastic compute.
 
-## Goals
+| Mode | Users | Data store | SCE backend | Vector | Objects | Orchestration |
+|------|-------|-----------|-------------|--------|---------|---------------|
+| Local | 1 | SQLite | SQLite WAL | usearch | Local FS | None |
+| Single-server | 1–50 | Postgres | Postgres + NATS | pgvector | S3 | Systemd / Docker |
+| Multi-server | 50+ | Postgres cluster | NATS JetStream | pgvector cluster | S3 | Kubernetes |
 
-- Provide an authoritative, unambiguous specification for this subsystem.
-- Define contracts, invariants, and acceptance criteria consumed by AI agents.
-- Stay small enough to review, large enough to remove ambiguity.
+## Local Mode
 
-## Non-Goals
-
-- Implementation code — this repository is documentation-only (see [AI Coding Rules](./AI_CODING_RULES.md)).
-- Vendor-specific tuning beyond what [Model Providers](./MODEL_PROVIDERS.md) allows.
-- Duplicating contracts that belong to another subsystem; link instead.
-
-## Requirements
-
-- **MUST** be consumable by both humans and AI agents.
-- **MUST** publish every state change to the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md).
-- **MUST** pass every rule enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
-- **MUST** be observable through the metrics defined in [Observability](./OBSERVABILITY.md).
-- **SHOULD** degrade gracefully rather than fail hard.
-- **MAY** be extended via the [Plugin SDK](./PLUGIN_SDK.md) when the extension point is declared here.
-
-## Architecture
+A single `aidevos-server` binary starts every subsystem in-process.
 
 ```mermaid
 flowchart LR
-  IN([Input]) --> SUB[Deployment]
-  SUB --> CTX[(Shared Context Engine)]
-  SUB --> GUARD{Architecture Guardian}
-  GUARD -->|ok| OUT([Output])
-  GUARD -->|veto| SUB
+  subgraph "Single machine"
+    BIN[aidevos-server]
+    SQLITE[(SQLite WAL)]
+    VEC[(usearch HNSW)]
+    FS[(~/.aidevos/objects)]
+    MCP_L[MCP servers]
+    LM[Ollama / local models]
+  end
+  CLI -- IPC/HTTP --> BIN
+  WEB[Web UI] -- HTTP+WS --> BIN
+  BIN --> SQLITE & VEC & FS
+  BIN -- stdio MCP --> MCP_L
+  BIN -- HTTP --> LM
 ```
 
-The subsystem is stateless at the process boundary; all durable state lives in the [Persistent Memory](./PERSISTENT_MEMORY.md) tier and is projected on demand.
+Data directory: `~/.aidevos/` with `config.toml`, `db.sqlite` (WAL mode), `objects/`, `plugins/`. SQLite uses `PRAGMA synchronous = NORMAL`; usearch runs in-process with configurable HNSW parameters.
 
-## Interfaces
+## Single-Server Mode
 
-- See related subsystems for the concrete API surface this document constrains.
+One machine runs `aidevos-server` with Postgres replacing SQLite. NATS provides the SCE event bus for real-time subscriptions. MCP servers run as sidecar processes.
 
-All interfaces follow the envelope defined in [Agent Communication](./AGENT_COMMUNICATION.md) and the error contract defined in [API Spec](./API_SPEC.md).
+```mermaid
+flowchart TB
+  subgraph Server
+    BIN[aidevos-server]
+    MCP1[MCP code] & MCP2[MCP filesystem] & MCP3[MCP custom]
+  end
+  PG[(Postgres)]
+  NATS[NATS/JetStream]
+  S3[(S3-compatible)]
+  PG_VEC[(pgvector)]
+  CLI & USERS[1–50 users] -- HTTP+WS --> BIN
+  BIN -- stdio/tcp --> MCP1 & MCP2 & MCP3
+  BIN --> PG & PG_VEC & NATS & S3
+```
 
-## Data Model
+Migration from SQLite: `aidevos-server doctor --pre-migration-check` → `aidevos-server migrate export --format=pg_dump` → `aidevos-server migrate up`. Vector data is rebuilt from stored embeddings.
 
-- Entities and fields are declared in the referenced subsystems and in [DATABASE](./DATABASE.md).
+## Multi-Server Mode
 
-Retention and encryption rules are inherited from [Data Retention](./DATA_RETENTION.md) and [Encryption](./ENCRYPTION.md).
+Multiple `aidevos-server` instances behind a load balancer with NATS JetStream as the SCE backbone and Kubernetes for orchestration.
+
+```mermaid
+flowchart TB
+  LB[Load Balancer]
+  subgraph Kubernetes
+    subgraph Workers HPA
+      W1 & W2 & W3[aidevos-server]
+    end
+    subgraph Stateful
+      PG((Postgres Primary))
+      PG_REPL((Read replicas))
+      PG_VEC[(pgvector)]
+      NATS_N[NATS JetStream 3-node]
+    end
+    subgraph Background HPA
+      DISP[Dispatcher pool]
+      DISC[Model Discovery]
+      SCHED[Scheduler]
+    end
+    OBJ[S3/MinIO]
+  end
+  USERS --> LB --> W1 & W2 & W3
+  W1 & W2 & W3 --> PG & PG_REPL & PG_VEC & NATS_N & OBJ
+  DISP & DISC & SCHED --> NATS_N
+```
+
+## Container Images
+
+```dockerfile
+FROM node:22-slim AS builder
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci && npm run build && npm prune --production
+
+FROM gcr.io/distroless/nodejs22-debian12:nonroot
+WORKDIR /app
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/node_modules ./node_modules
+EXPOSE 7700
+HEALTHCHECK CMD ["node", "dist/bin/healthcheck.js"]
+CMD ["dist/bin/server.js"]
+```
+
+Alternative bases: `node:22-slim` (~250 MB, dev) or distroless (~120 MB, production). Rust builds use `gcr.io/distroless/cc-debian12:nonroot` (~25 MB).
+
+## Kubernetes Manifests
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aidevos-server
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  template:
+    spec:
+      containers:
+      - name: server
+        image: aidevos/server:latest
+        ports:
+        - containerPort: 7700
+          name: http
+        - containerPort: 7701
+          name: metrics
+        envFrom:
+        - secretRef:
+            name: aidevos-secrets
+        - configMapRef:
+            name: aidevos-config
+        resources:
+          requests:
+            cpu: 500m
+            memory: 512Mi
+          limits:
+            cpu: 2000m
+            memory: 2Gi
+        volumeMounts:
+        - mountPath: /data
+          name: data
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: aidevos-data
+```
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aidevos-config
+data:
+  AIDEVOS_LISTEN: "0.0.0.0:7700"
+  AIDEVOS_DB_TYPE: "postgres"
+  AIDEVOS_SCE_BACKEND: "nats"
+  AIDEVOS_VECTOR_BACKEND: "pgvector"
+  AIDEVOS_OBJECT_BACKEND: "s3"
+  AIDEVOS_LOG_LEVEL: "info"
+```
+
+PVC (10 GiB, ReadWriteOnce) and HPA (2–20 replicas, scaling on `queue_depth` metric) complete the manifest set (see full HPA spec in [Scalability](./SCALABILITY.md)).
+
+## Environment Configuration
+
+Precedence (highest wins): CLI flags → `AIDEVOS_*` env vars → `config.toml` → defaults. Env var naming: uppercase, underscore-separated, matching TOML path.
+
+```toml
+[server]  listen → AIDEVOS_LISTEN, tls → AIDEVOS_TLS
+[database] type → AIDEVOS_DB_TYPE, url → AIDEVOS_DB_URL
+[sce]      backend → AIDEVOS_SCE_BACKEND, nats_url → AIDEVOS_SCE_NATS_URL
+[vector]   backend → AIDEVOS_VECTOR_BACKEND, dimensions → AIDEVOS_VECTOR_DIMENSIONS
+[objects]  backend → AIDEVOS_OBJECT_BACKEND, bucket → AIDEVOS_OBJECT_BUCKET
+[models]   discovery_ttl_minutes → AIDEVOS_DISCOVERY_TTL_MINUTES
+```
+
+Secrets MUST use `AIDEVOS_SECRET_*` variables or the secrets management subsystem — never `config.toml`.
+
+## Health Checks
+
+```
+GET /healthz → { status: "ok", version: "2.1.0", uptime_s: 84321 }
+GET /readyz  → { status: "ok", services: { database, sce, vector, objects, models } }
+```
+
+Liveness probe: `GET /healthz` (10 s delay, 15 s period). Readiness probe: `GET /readyz` (5 s delay, 10 s period, 3 failures threshold). `/readyz` returns 503 until every service reports connected. A single degraded service returns `status: "degraded"` with the degraded service listed — this MUST NOT fail readiness.
+
+## Startup Sequence
+
+1. Parse and validate config
+2. Open database (SQLite or Postgres); run migrations
+3. Connect SCE broker (SQLite WAL or NATS JetStream)
+4. Connect vector index (usearch or pgvector)
+5. Connect object store (local FS or S3)
+6. Run model discovery
+7. Load plugin manifests
+8. Start Job Scheduler
+9. Start HTTP + WebSocket server
+10. Emit `server.started` on SCE
+11. Signal readiness
+
+Each step MUST complete within `startup_timeout_ms` (default 60 s). Optional service failures (vector, objects, models) enter degraded mode; required service failures (database, SCE) exit with code 1.
+
+## Shutdown Sequence
+
+On `SIGTERM`:
+
+1. Mark `/readyz` unhealthy; stop accepting new connections
+2. Emit `server.stopping` on SCE (reason: `shutdown`)
+3. Drain in-flight HTTP requests (`drain_timeout_ms`, default 30 s)
+4. Cancel active Kernel runs
+5. Wait for worker checkpointing (`shutdown_grace_ms`, default 10 s)
+6. Flush SCE buffer; WAL checkpoint
+7. Close database, object store, vector index
+8. Exit 0
+
+If `drain_timeout_ms` is exceeded, force-close remaining connections and exit 1.
+
+## Migration
+
+Minor/patch upgrades: replace binary, send `SIGUSR2`, migrations run in-place.
+
+Major upgrades use blue/green: deploy green stack alongside blue → green runs backward-compatible migrations → smoke tests → switch load balancer → monitor 15 min → tear down blue.
+
+Schema changes MUST be backward-compatible for one release: new columns have defaults, removed columns are deprecated but not dropped until next release, renamed columns use a view + trigger wrapper.
 
 ## Failure Modes
 
-- Every failure surfaces through the Shared Context Engine and the audit log.
-- Degradation is preferred over hard failure whenever safety permits.
+| Mode | Detection | Response |
+|------|-----------|----------|
+| Database unreachable | Connection pool timeout | Retry with backoff; exit 1 (local) or failover to replica (multi) |
+| NATS cluster split | SCE events not replicating | Fall back to SQLite SCE buffer; re-sync on heal |
+| S3 unavailable | PUT/GET failures | Buffer locally; replay when S3 returns |
+| Disk full | Write error | Emergency flush WAL; alert; scale PVC |
+| Vector rebuild | /readyz degraded | Serve FTS fallback; emit `vector.degraded` |
+| OOMKilled | Container restart | Increase limits; tune `max_concurrent_runs` |
+| Config parse error | Startup validation | Log error; fall back to defaults for optional keys |
+| TLS cert expiry | /healthz includes `tls_expiry` | Alert 30 days before expiry; cert-manager auto-renew |
+| Migration failure | Version mismatch | Roll back; manual intervention required |
+| Model discovery timeout | Exceeds TTL | Serve cached model list; retry next interval |
 
-Every failure emits a structured event on the Shared Context Engine and is recorded in the [Audit Log](./AUDIT_LOG.md).
+## Security
 
-## Security Considerations
+TLS: `server.tls.enabled = true` with cert_file, key_file, `min_version = "1.3"`. Inter-service mTLS via sidecar proxy (Linkerd/Istio).
 
-- Trust boundary: crosses only through signed envelopes (see [Security Model](./SECURITY_MODEL.md)).
-- Secrets are read from [Secrets Management](./SECRETS_MANAGEMENT.md); never inlined.
-- All external calls go through [Model Providers](./MODEL_PROVIDERS.md) or the [Plugin SDK](./PLUGIN_SDK.md) — no ad-hoc network access.
+Network policies restrict ingress (ingress-nginx only, port 7700) and egress (Postgres port 5432, NATS port 4222).
 
-## Observability
-
-- Metrics, traces, and logs conform to [Observability](./OBSERVABILITY.md), [Tracing](./TRACING.md), and [Logging](./LOGGING.md).
-- Every run carries a `correlation_id` propagated from the Kernel.
-
-## Acceptance Criteria
-
-- The contracts above are testable via the [Eval Harness](./EVAL_HARNESS.md).
-- A change to this document requires a matching update to any dependent doc listed in *Related Documents*.
-
-## Open Questions
-
-- _Track open questions as ADRs under [templates/ADR](../templates/ADR.md)._
+Secrets are mounted as files into `/etc/aidevos/secrets/` from Kubernetes Secrets. `AIDEVOS_SECRET_*` env vars are read at startup and override file-based secrets.
 
 ## Related Documents
 
-- [System Overview](./SYSTEM_OVERVIEW.md)
-- [Main Ai Kernel](./MAIN_AI_KERNEL.md)
-- [Prd](./PRD.md)
-- [Trd](./TRD.md)
+- [Localhost Architecture](./LOCALHOST_ARCHITECTURE.md) — local-only topology
+- [Backend](./BACKEND.md) — process architecture, config, startup/shutdown
+- [Database](./DATABASE.md) — schema, migrations
+- [Scalability](./SCALABILITY.md) — horizontal scaling, autoscaling
+- [Reliability](./RELIABILITY.md) — SLOs, failure modes, DR
+- [Security Model](./SECURITY_MODEL.md) — trust boundaries
+- [Secrets Management](./SECRETS_MANAGEMENT.md)
+- [Observability](./OBSERVABILITY.md)
 - [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)
+- [System Overview](./SYSTEM_OVERVIEW.md)

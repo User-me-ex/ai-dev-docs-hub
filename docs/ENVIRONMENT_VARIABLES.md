@@ -1,88 +1,129 @@
 # Environment Variables
 
-> Specification for the Environment Variables subsystem of the AI Development Operating System. This document is normative — implementations MUST satisfy every MUST clause below.
+> Complete reference for all environment variables consumed by AI Dev OS. This document is normative — implementations MUST support every variable listed below.
 
 ## Overview
 
-Environment Variables is a first-class subsystem of the AI Development Operating System (AI Dev OS). It participates in the Kernel's intake → plan → route → execute → critique → merge → guard → deliver loop and communicates exclusively through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md). This document defines its purpose, contracts, invariants, and failure modes so that AI agents can reason about it without inspecting any implementation.
+AI Dev OS reads environment variables at startup for configuration overrides, secrets injection, and platform detection. Variables use the `AIDEVOS_` prefix for first-party settings. Third-party provider API keys use their standard variable names (e.g., `OPENAI_API_KEY`).
 
-## Goals
+Environment variables take precedence over config file values but are overridden by CLI flags. See [Configuration](./CONFIGURATION.md#precedence) for the full precedence chain.
 
-- Provide an authoritative, unambiguous specification for this subsystem.
-- Define contracts, invariants, and acceptance criteria consumed by AI agents.
-- Stay small enough to review, large enough to remove ambiguity.
+## Variables Reference
 
-## Non-Goals
+### Core paths
 
-- Implementation code — this repository is documentation-only (see [AI Coding Rules](./AI_CODING_RULES.md)).
-- Vendor-specific tuning beyond what [Model Providers](./MODEL_PROVIDERS.md) allows.
-- Duplicating contracts that belong to another subsystem; link instead.
+| Variable | Type | Default | Description | Config equivalent |
+|----------|------|---------|-------------|-------------------|
+| `AIDEVOS_HOME` | string | `~/.aidevos` | Root data directory for databases, config, logs | — |
+| `AIDEVOS_CONFIG` | string | `$AIDEVOS_HOME/config.toml` | Path to the user config file | — |
+| `AIDEVOS_DB_PATH` | string | `$AIDEVOS_HOME/data/aidevos.db` | SQLite database file path | `backend.db_path` |
+| `AIDEVOS_VECTOR_DB_PATH` | string | `$AIDEVOS_HOME/data/vectors/` | Vector index directory (usearch) | `memory.vector_path` |
 
-## Requirements
+### Server / backend
 
-- **MUST** be consumable by both humans and AI agents.
-- **MUST** publish every state change to the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md).
-- **MUST** pass every rule enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
-- **MUST** be observable through the metrics defined in [Observability](./OBSERVABILITY.md).
-- **SHOULD** degrade gracefully rather than fail hard.
-- **MAY** be extended via the [Plugin SDK](./PLUGIN_SDK.md) when the extension point is declared here.
+| Variable | Type | Default | Description | Config equivalent |
+|----------|------|---------|-------------|-------------------|
+| `AIDEVOS_BACKEND_HOST` | string | `127.0.0.1` | Bind address for the HTTP/gRPC server | `backend.host` |
+| `AIDEVOS_BACKEND_PORT` | integer | `8374` | Server listen port | `backend.port` |
+| `AIDEVOS_METRICS_PORT` | integer | `9090` | Prometheus metrics server port | `metrics.port` |
+| `AIDEVOS_MAX_WORKERS` | integer | `10` | Maximum concurrent worker agents per pod | `backend.max_workers_per_pod` |
+| `AIDEVOS_RUN_TIMEOUT_MS` | integer | `300000` | Maximum wall-clock time for a single agent run (ms) | `backend.run_timeout_ms` |
 
-## Architecture
+### Logging and observability
 
-```mermaid
-flowchart LR
-  IN([Input]) --> SUB[Environment Variables]
-  SUB --> CTX[(Shared Context Engine)]
-  SUB --> GUARD{Architecture Guardian}
-  GUARD -->|ok| OUT([Output])
-  GUARD -->|veto| SUB
+| Variable | Type | Default | Description | Config equivalent |
+|----------|------|---------|-------------|-------------------|
+| `AIDEVOS_LOG_LEVEL` | enum | `info` | Log level: `trace`, `debug`, `info`, `warn`, `error`, `fatal` | `logging.level` |
+| `AIDEVOS_LOG_FORMAT` | enum | `text` | Log format: `text` or `json` | `logging.format` |
+| `AIDEVOS_TRACING_ENABLED` | bool | `false` | Enable OpenTelemetry tracing | `tracing.enabled` |
+| `AIDEVOS_TRACING_ENDPOINT` | string | `http://localhost:4318` | OTLP HTTP endpoint for trace export | `tracing.endpoint` |
+| `AIDEVOS_TELEMETRY_ENABLED` | bool | `true` | Enable anonymous product telemetry | `telemetry.enabled` |
+
+### Model providers
+
+| Variable | Type | Default | Description | Config equivalent |
+|----------|------|---------|-------------|-------------------|
+| `AIDEVOS_DEFAULT_PROVIDER` | string | `openai` | Default provider for unclassified requests | `router.default_provider` |
+| `OPENAI_API_KEY` | string | — | OpenAI API key | `providers.openai.api_key` |
+| `OPENAI_ORG_ID` | string | — | OpenAI organization ID | `providers.openai.org_id` |
+| `ANTHROPIC_API_KEY` | string | — | Anthropic API key | `providers.anthropic.api_key` |
+| `GOOGLE_API_KEY` | string | — | Google AI / Gemini API key | `providers.google.api_key` |
+| `MISTRAL_API_KEY` | string | — | Mistral API key | `providers.mistral.api_key` |
+| `GROQ_API_KEY` | string | — | Groq API key | `providers.groq.api_key` |
+| `COHERE_API_KEY` | string | — | Cohere API key | `providers.cohere.api_key` |
+| `TOGETHER_API_KEY` | string | — | Together AI API key | `providers.together.api_key` |
+| `DEEPSEEK_API_KEY` | string | — | DeepSeek API key | `providers.deepseek.api_key` |
+| `OPENAI_BASE_URL` | string | `https://api.openai.com/v1` | Custom base URL for OpenAI-compatible APIs | `providers.openai.base_url` |
+| `ANTHROPIC_BASE_URL` | string | `https://api.anthropic.com` | Custom base URL for Anthropic | `providers.anthropic.base_url` |
+
+### Secrets and security
+
+| Variable | Type | Default | Description | Config equivalent |
+|----------|------|---------|-------------|-------------------|
+| `AIDEVOS_SECRETS_BACKEND` | enum | `local` | Secrets storage: `local`, `keychain`, `vault` | `secrets.backend` |
+| `AIDEVOS_JWT_SECRET` | string | — | JWT signing secret (auto-generated if empty) | `auth.jwt_secret` |
+| `AIDEVOS_ENCRYPTION_KEY` | string | — | Key for encrypting secrets at rest (age format) | `secrets.encryption_key` |
+
+### SCE and messaging
+
+| Variable | Type | Default | Description | Config equivalent |
+|----------|------|---------|-------------|-------------------|
+| `AIDEVOS_SCE_BACKEND` | enum | `sqlite` | SCE broker: `sqlite` or `nats` | `sce.backend` |
+| `NATS_URL` | string | `nats://localhost:4222` | NATS server URL (used when SCE backend is NATS) | `sce.nats_url` |
+| `NATS_CREDS` | string | — | NATS credentials file path | `sce.nats_creds` |
+
+### Queue and tuning
+
+| Variable | Type | Default | Description | Config equivalent |
+|----------|------|---------|-------------|-------------------|
+| `AIDEVOS_QUEUE_SOFT_CAP` | integer | `500` | Queue depth that triggers backpressure warning | `queue.soft_cap` |
+| `AIDEVOS_QUEUE_HARD_CAP` | integer | `10000` | Queue depth that causes new tasks to be rejected | `queue.hard_cap` |
+| `AIDEVOS_WAL_CHECKPOINT_INTERVAL` | integer | `1000` | SCE events between WAL checkpoints | `sce.wal_checkpoint_interval` |
+| `AIDEVOS_VECTOR_MAX_MEMORY_MB` | integer | `2048` | Max memory for in-process vector index (MB) | `memory.vector_max_memory_mb` |
+| `AIDEVOS_MAX_CONTEXT_TOKENS` | integer | `131072` | Max tokens per context window | `memory.max_context_tokens` |
+
+### Database connection (server mode)
+
+| Variable | Type | Default | Description | Config equivalent |
+|----------|------|---------|-------------|-------------------|
+| `AIDEVOS_DB_URL` | string | — | Postgres connection string (server mode only) | `backend.db_url` |
+| `AIDEVOS_DB_POOL_SIZE` | integer | `10` | Postgres connection pool size (server mode) | `backend.db_pool_size` |
+| `AIDEVOS_DB_READ_REPLICA_URL` | string | — | Postgres read replica connection string | `backend.db_read_replica_url` |
+
+### Proxy / network
+
+| Variable | Type | Default | Description | Config equivalent |
+|----------|------|---------|-------------|-------------------|
+| `HTTP_PROXY` | string | — | HTTP proxy for outbound requests | — |
+| `HTTPS_PROXY` | string | — | HTTPS proxy for outbound requests | — |
+| `NO_PROXY` | string | — | Comma-separated hosts to bypass proxy | — |
+| `AIDEVOS_PROXY_ENABLED` | bool | `false` | Enable proxy support for model API calls | `network.proxy_enabled` |
+
+### Example usage
+
+```bash
+# Minimal local setup
+export AIDEVOS_HOME="$HOME/.aidevos"
+export OPENAI_API_KEY="sk-..."
+export ANTHROPIC_API_KEY="sk-ant-..."
+export AIDEVOS_LOG_LEVEL="debug"
+
+# Server mode with Postgres
+export AIDEVOS_BACKEND_MODE="server"
+export AIDEVOS_DB_URL="postgres://user:pass@host:5432/aidevos"
+export AIDEVOS_SCE_BACKEND="nats"
+export NATS_URL="nats://nats-cluster:4222"
+
+# Production tracing
+export AIDEVOS_TRACING_ENABLED="true"
+export AIDEVOS_TRACING_ENDPOINT="http://otel-collector:4318"
 ```
-
-The subsystem is stateless at the process boundary; all durable state lives in the [Persistent Memory](./PERSISTENT_MEMORY.md) tier and is projected on demand.
-
-## Interfaces
-
-- See related subsystems for the concrete API surface this document constrains.
-
-All interfaces follow the envelope defined in [Agent Communication](./AGENT_COMMUNICATION.md) and the error contract defined in [API Spec](./API_SPEC.md).
-
-## Data Model
-
-- Entities and fields are declared in the referenced subsystems and in [DATABASE](./DATABASE.md).
-
-Retention and encryption rules are inherited from [Data Retention](./DATA_RETENTION.md) and [Encryption](./ENCRYPTION.md).
-
-## Failure Modes
-
-- Every failure surfaces through the Shared Context Engine and the audit log.
-- Degradation is preferred over hard failure whenever safety permits.
-
-Every failure emits a structured event on the Shared Context Engine and is recorded in the [Audit Log](./AUDIT_LOG.md).
-
-## Security Considerations
-
-- Trust boundary: crosses only through signed envelopes (see [Security Model](./SECURITY_MODEL.md)).
-- Secrets are read from [Secrets Management](./SECRETS_MANAGEMENT.md); never inlined.
-- All external calls go through [Model Providers](./MODEL_PROVIDERS.md) or the [Plugin SDK](./PLUGIN_SDK.md) — no ad-hoc network access.
-
-## Observability
-
-- Metrics, traces, and logs conform to [Observability](./OBSERVABILITY.md), [Tracing](./TRACING.md), and [Logging](./LOGGING.md).
-- Every run carries a `correlation_id` propagated from the Kernel.
-
-## Acceptance Criteria
-
-- The contracts above are testable via the [Eval Harness](./EVAL_HARNESS.md).
-- A change to this document requires a matching update to any dependent doc listed in *Related Documents*.
-
-## Open Questions
-
-- _Track open questions as ADRs under [templates/ADR](../templates/ADR.md)._
 
 ## Related Documents
 
-- [System Overview](./SYSTEM_OVERVIEW.md)
-- [Main Ai Kernel](./MAIN_AI_KERNEL.md)
-- [Prd](./PRD.md)
-- [Trd](./TRD.md)
-- [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)
+- [Configuration](./CONFIGURATION.md) — config file format, precedence, dynamic reload
+- [Secrets Management](./SECRETS_MANAGEMENT.md) — secret storage backends, encryption
+- [CLI](./CLI.md) — command-line flags (higher precedence than env vars)
+- [Deployment](./DEPLOYMENT.md) — env var injection in Kubernetes, Docker
+- [Backend](./BACKEND.md) — startup sequence, env var loading order
+- [Observability](./OBSERVABILITY.md) — tracing, logging configuration via env vars

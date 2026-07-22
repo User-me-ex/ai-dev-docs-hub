@@ -1,88 +1,199 @@
 # Backup Strategy
 
-> Specification for the Backup Strategy subsystem of the AI Development Operating System. This document is normative — implementations MUST satisfy every MUST clause below.
+> How AI Dev OS data is backed up, verified, and restored. This document is normative — implementations MUST satisfy every MUST clause below.
 
 ## Overview
 
-Backup Strategy is a first-class subsystem of the AI Development Operating System (AI Dev OS). It participates in the Kernel's intake → plan → route → execute → critique → merge → guard → deliver loop and communicates exclusively through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md). This document defines its purpose, contracts, invariants, and failure modes so that AI agents can reason about it without inspecting any implementation.
+AI Dev OS stores durable state across several data stores: the SQLite/Postgres database, vector index, configuration files, secrets, and custom user rules. A single backup strategy covers all of them with appropriate frequency, consistency guarantees, and retention policies.
 
-## Goals
+The backup architecture follows a **copy-on-write with WAL archiving** pattern for databases and **filesystem snapshot** for configuration. Every backup is checksummed and the manifest is recorded in the backup log for auditability.
 
-- Provide an authoritative, unambiguous specification for this subsystem.
-- Define contracts, invariants, and acceptance criteria consumed by AI agents.
-- Stay small enough to review, large enough to remove ambiguity.
+## What to Back Up
 
-## Non-Goals
+| Asset | Location | Size estimate | Criticality |
+|-------|----------|---------------|-------------|
+| SQLite database | `{AIDEVOS_HOME}/data/aidevos.db` | 10 MB – 50 GB | Critical |
+| Postgres database (server mode) | External Postgres cluster | 1 GB – 500 GB | Critical |
+| Configuration directory | `~/.aidevos/` | < 1 MB | High |
+| Secrets directory | `~/.aidevos/secrets/` | < 100 KB | Critical |
+| Custom rules | `{AIDEVOS_HOME}/rules/` | < 10 MB | Medium |
+| SCE event log (WAL archives) | `{AIDEVOS_HOME}/data/scd/` | 100 MB – 10 GB | High |
+| Vector index (usearch) | `{AIDEVOS_HOME}/data/vectors/` | 100 MB – 10 GB | Low (rebuildable) |
 
-- Implementation code — this repository is documentation-only (see [AI Coding Rules](./AI_CODING_RULES.md)).
-- Vendor-specific tuning beyond what [Model Providers](./MODEL_PROVIDERS.md) allows.
-- Duplicating contracts that belong to another subsystem; link instead.
+Secrets MUST be backed up with client-side encryption. Vector indexes SHOULD be backed up only if the embeddings source (database) is not available for rebuild.
 
-## Requirements
+## Backup Methods
 
-- **MUST** be consumable by both humans and AI agents.
-- **MUST** publish every state change to the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md).
-- **MUST** pass every rule enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
-- **MUST** be observable through the metrics defined in [Observability](./OBSERVABILITY.md).
-- **SHOULD** degrade gracefully rather than fail hard.
-- **MAY** be extended via the [Plugin SDK](./PLUGIN_SDK.md) when the extension point is declared here.
+### SQLite .backup command
 
-## Architecture
+For SQLite-backed deployments, use the `.backup` command via the CLI:
 
-```mermaid
-flowchart LR
-  IN([Input]) --> SUB[Backup Strategy]
-  SUB --> CTX[(Shared Context Engine)]
-  SUB --> GUARD{Architecture Guardian}
-  GUARD -->|ok| OUT([Output])
-  GUARD -->|veto| SUB
+```
+aidevos db backup --output /mnt/backup/aidevos_$(date +%F).db
 ```
 
-The subsystem is stateless at the process boundary; all durable state lives in the [Persistent Memory](./PERSISTENT_MEMORY.md) tier and is projected on demand.
+The `.backup` command acquires a shared lock, creates a consistent snapshot without blocking readers, and verifies the resulting file with `PRAGMA integrity_check`.
 
-## Interfaces
+### Filesystem copy (cold)
 
-- See related subsystems for the concrete API surface this document constrains.
+For configuration, rules, and secrets, an atomic filesystem copy suffices:
 
-All interfaces follow the envelope defined in [Agent Communication](./AGENT_COMMUNICATION.md) and the error contract defined in [API Spec](./API_SPEC.md).
+```bash
+rsync -a --link-dest=/mnt/backup/latest \
+  ~/.aidevos/ \
+  /mnt/backup/$(date +%F)/
+```
 
-## Data Model
+Use `--link-dest` for incremental snapshots. Secrets MUST be encrypted before copying to the backup target.
 
-- Entities and fields are declared in the referenced subsystems and in [DATABASE](./DATABASE.md).
+### WAL checkpoint + copy
 
-Retention and encryption rules are inherited from [Data Retention](./DATA_RETENTION.md) and [Encryption](./ENCRYPTION.md).
+For point-in-time recovery capability, archive the SQLite WAL and shm files alongside the database:
+
+```bash
+sqlite3 aidevos.db "PRAGMA wal_checkpoint(TRUNCATE);"
+cp aidevos.db aidevos.db-wal aidevos.db-shm /mnt/backup/pitr/
+```
+
+This produces a consistent state at the checkpoint. For continuous archiving, enable WAL journal mode and archive WAL files as they fill (`wal_archive_dir` config option).
+
+### Postgres pg_dump / pgBackRest
+
+For server-mode Postgres:
+
+| Method | Tool | RPO | RTO | Use case |
+|--------|------|-----|-----|----------|
+| Logical dump | `pg_dump` | Daily | 1–4 hr | Small databases, schema-only |
+| Physical backup | `pgBackRest` | 1 min (WAL streaming) | 5–30 min | Large databases, PITR |
+| Snapshot | Volume snapshot (EBS, Cinder) | Configurable | 1–5 min | Cloud deployments |
+
+## Backup Schedule
+
+| Data | Frequency | Retention | Method |
+|------|-----------|-----------|--------|
+| SQLite database | Daily (full), hourly (WAL) | 30 daily, 12 monthly | `.backup` + WAL archive |
+| Postgres database | Continuous WAL, daily full | 7 daily, 4 weekly, 12 monthly | pgBackRest |
+| Configuration | On-change (post-save hook) | 90 days | Filesystem copy |
+| Secrets | On-change | 90 days, encrypted | Filesystem copy + age/gpg |
+| Custom rules | On-change | 90 days | Filesystem copy |
+| SCE event log | Daily (WAL rotation) | 7 days | WAL archive |
+| Vector index | Weekly | 4 weekly | Filesystem copy |
+
+On-change backups use a filesystem watcher (`inotify` / `ReadDirectoryChangesW`) that triggers a backup within 60 s of detecting a write.
+
+## Restore Procedure
+
+### Database restore
+
+```
+1. Stop the aidevos-server process.
+2. Locate the target backup: `ls /mnt/backup/$(date -d '-1 day' +%F)/`
+3. Restore the database file:
+   cp /mnt/backup/2026-07-21/aidevos.db {AIDEVOS_HOME}/data/aidevos.db
+4. Run integrity check: `aidevos db check`
+5. Apply WAL archives for PITR if needed (see Point-in-Time Recovery).
+6. Start the server: `aidevos server start`
+7. Verify with: `aidevos doctor --quick`
+```
+
+### Configuration restore
+
+```
+1. rsync -a /mnt/backup/2026-07-21/config/ ~/.aidevos/
+2. Decrypt secrets: `age --decrypt -i ~/.age/key.txt < backup/secrets.tar.age | tar xf -`
+3. Restart server to reload configuration.
+```
+
+### Full system restore
+
+```
+1. Reinstall AI Dev OS (same version as backup).
+2. Restore database (above).
+3. Restore configuration and rules (above).
+4. Restore secrets (above).
+5. Run `aidevos doctor --full` to validate all subsystems.
+6. Run `aidevos db reindex` to rebuild vector and FTS indexes.
+7. Verify agent workspaces are accessible and history is intact.
+```
+
+## Point-in-Time Recovery (PITR)
+
+SQLite WAL archiving enables PITR within the window of retained WAL files:
+
+```
+1. Identify the target timestamp: 2026-07-21T14:30:00Z
+2. Locate the base backup: /mnt/backup/2026-07-21/aidevos_base.db
+3. Locate WAL archive: /mnt/backup/wal_archive/
+4. Replay WAL files up to the target timestamp:
+   sqlite3 aidevos_restored.db "
+     PRAGMA journal_mode = WAL;
+     RESTORE FROM '/mnt/backup/wal_archive/';
+   "
+5. Verify consistency: `PRAGMA integrity_check;`
+```
+
+WAL files are named `{seq_number}_{timestamp}.wal` and are automatically rotated at 10 MB or hourly, whichever comes first.
+
+## Testing Backups
+
+| Test | Frequency | Action |
+|------|-----------|--------|
+| Integrity check | Daily (automated) | `PRAGMA integrity_check` on all backups |
+| Restore dry-run | Weekly | Restore to a staging directory; verify checksums |
+| Full restore drill | Monthly | Spin up a clean environment; restore from latest backup |
+| PITR drill | Quarterly | Pick a random timestamp; verify exact state recovery |
+| Secrets decryption | Weekly | Attempt decryption of the latest secrets backup |
+
+Each test produces a structured result published as `backup.test_result` on the SCE. Failure of any test MUST alert the operator.
+
+## Cloud Backup Integration (Optional)
+
+### S3-compatible object store
+
+```
+bucket: aidevos-backups-{env}
+prefix: {hostname}/{backup_type}/
+lifecycle: auto-delete after retention period
+encryption: server-side AES-256 or client-side age
+```
+
+Backup command with S3 upload:
+
+```bash
+aidevos db backup --output /tmp/aidevos.db --compress
+aws s3 cp /tmp/aidevos.db.zst s3://aidevos-backups-prod/host01/daily/
+```
+
+### Azure Blob Storage
+
+```
+container: aidevos-backups
+blob tier: Hot (7 days), Cool (30 days), Archive (after 30 days)
+```
+
+### Upload retry
+
+Cloud uploads use truncated exponential backoff (base 2 s, max 60 s, 5 attempts). If all attempts fail, the backup remains on local disk and a `backup.upload_failed` event is emitted.
 
 ## Failure Modes
 
-- Every failure surfaces through the Shared Context Engine and the audit log.
-- Degradation is preferred over hard failure whenever safety permits.
+| Failure | Detection | Response |
+|---------|-----------|----------|
+| Backup target disk full | `backup.disk_full` event | Rotate oldest backups; alert operator |
+| Backup checksum mismatch | `backup.checksum_mismatch` event on verify | Retry backup immediately; if repeat, alert |
+| Secrets backup unreadable | Decryption test fails | Re-encrypt and re-upload; revoke compromised key |
+| Cloud upload failure | `backup.upload_failed` event | Local backup retained; retry on next schedule |
+| WAL archive gap | Missing sequence in WAL file names | Stop archiving; alert; perform full backup |
+| Database restore fails integrity check | `PRAGMA integrity_check` returns errors | Attempt restore from next oldest backup; escalate |
 
-Every failure emits a structured event on the Shared Context Engine and is recorded in the [Audit Log](./AUDIT_LOG.md).
-
-## Security Considerations
-
-- Trust boundary: crosses only through signed envelopes (see [Security Model](./SECURITY_MODEL.md)).
-- Secrets are read from [Secrets Management](./SECRETS_MANAGEMENT.md); never inlined.
-- All external calls go through [Model Providers](./MODEL_PROVIDERS.md) or the [Plugin SDK](./PLUGIN_SDK.md) — no ad-hoc network access.
-
-## Observability
-
-- Metrics, traces, and logs conform to [Observability](./OBSERVABILITY.md), [Tracing](./TRACING.md), and [Logging](./LOGGING.md).
-- Every run carries a `correlation_id` propagated from the Kernel.
-
-## Acceptance Criteria
-
-- The contracts above are testable via the [Eval Harness](./EVAL_HARNESS.md).
-- A change to this document requires a matching update to any dependent doc listed in *Related Documents*.
-
-## Open Questions
-
-- _Track open questions as ADRs under [templates/ADR](../templates/ADR.md)._
+All backup failures are recorded in the [Audit Log](./AUDIT_LOG.md) and surfaced via the [Observability](./OBSERVABILITY.md) subsystem.
 
 ## Related Documents
 
-- [System Overview](./SYSTEM_OVERVIEW.md)
-- [Main Ai Kernel](./MAIN_AI_KERNEL.md)
-- [Prd](./PRD.md)
-- [Trd](./TRD.md)
-- [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)
+- [Disaster Recovery](./DISASTER_RECOVERY.md) — RPO/RTO targets, recovery procedures per scenario
+- [Data Retention](./DATA_RETENTION.md) — retention policies, archival, purging
+- [Persistent Memory](./PERSISTENT_MEMORY.md) — memory record durability, WAL buffering
+- [Database](./DATABASE.md) — SQLite and Postgres configuration, WAL tuning
+- [Secrets Management](./SECRETS_MANAGEMENT.md) — backup encryption, key management
+- [Deployment](./DEPLOYMENT.md) — cloud backup integration, volume snapshots
+- [Reliability](./RELIABILITY.md) — backup verification as part of DR testing

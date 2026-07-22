@@ -1,88 +1,115 @@
-# Roadmap
-
-> Specification for the Roadmap subsystem of the AI Development Operating System. This document is normative — implementations MUST satisfy every MUST clause below.
+# Product Roadmap
 
 ## Overview
 
-Roadmap is a first-class subsystem of the AI Development Operating System (AI Dev OS). It participates in the Kernel's intake → plan → route → execute → critique → merge → guard → deliver loop and communicates exclusively through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md). This document defines its purpose, contracts, invariants, and failure modes so that AI agents can reason about it without inspecting any implementation.
+This document outlines the high-level strategic roadmap for AI Dev OS — a multi-agent AI operating system for software development. The roadmap covers three horizons: near-term (0–3 months), mid-term (3–6 months), and long-term (6–12 months), culminating in a v1.0 release.
 
-## Goals
+---
 
-- Provide an authoritative, unambiguous specification for this subsystem.
-- Define contracts, invariants, and acceptance criteria consumed by AI agents.
-- Stay small enough to review, large enough to remove ambiguity.
+## Current Status
 
-## Non-Goals
+| Phase | Status |
+|---|---|
+| Phase 0: Foundation | Complete |
+| Phase 1: Kernel MVP | In development |
 
-- Implementation code — this repository is documentation-only (see [AI Coding Rules](./AI_CODING_RULES.md)).
-- Vendor-specific tuning beyond what [Model Providers](./MODEL_PROVIDERS.md) allows.
-- Duplicating contracts that belong to another subsystem; link instead.
+---
 
-## Requirements
+## Near-Term (Next 3 Months)
 
-- **MUST** be consumable by both humans and AI agents.
-- **MUST** publish every state change to the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md).
-- **MUST** pass every rule enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
-- **MUST** be observable through the metrics defined in [Observability](./OBSERVABILITY.md).
-- **SHOULD** degrade gracefully rather than fail hard.
-- **MAY** be extended via the [Plugin SDK](./PLUGIN_SDK.md) when the extension point is declared here.
+### Phase 1 — Kernel MVP
 
-## Architecture
+| Item | Status | Priority | Dependencies |
+|---|---|---|---|
+| Agent lifecycle management | In progress | P0 | Runtime |
+| Task queue and scheduling | In progress | P0 | Agent lifecycle |
+| Inter-agent messaging bus | Planned | P1 | Task queue |
+| CLI tooling (run, logs, config) | In progress | P0 | — |
+| Plugin architecture | Planned | P1 | Kernel core |
 
-```mermaid
-flowchart LR
-  IN([Input]) --> SUB[Roadmap]
-  SUB --> CTX[(Shared Context Engine)]
-  SUB --> GUARD{Architecture Guardian}
-  GUARD -->|ok| OUT([Output])
-  GUARD -->|veto| SUB
-```
+### Phase 2 — Memory & Persistence
 
-The subsystem is stateless at the process boundary; all durable state lives in the [Persistent Memory](./PERSISTENT_MEMORY.md) tier and is projected on demand.
+| Item | Status | Priority | Dependencies |
+|---|---|---|---|
+| Working memory (short-term) | In progress | P0 | Phase 1 |
+| Persistent memory (long-term) | Planned | P0 | Phase 1 |
+| Memory indexing and retrieval | Planned | P1 | Persistent memory |
 
-## Interfaces
+---
 
-- See related subsystems for the concrete API surface this document constrains.
+## Mid-Term (3–6 Months)
 
-All interfaces follow the envelope defined in [Agent Communication](./AGENT_COMMUNICATION.md) and the error contract defined in [API Spec](./API_SPEC.md).
+### Phase 3 — AI Groups
 
-## Data Model
+| Item | Status | Priority | Dependencies |
+|---|---|---|---|
+| Group formation protocols | Planned | P1 | Agent lifecycle |
+| Role-based agent specialization | Planned | P1 | Group protocols |
+| Group-level coordination | Planned | P1 | Phase 2 |
 
-- Entities and fields are declared in the referenced subsystems and in [DATABASE](./DATABASE.md).
+### Phase 4 — Knowledge System
 
-Retention and encryption rules are inherited from [Data Retention](./DATA_RETENTION.md) and [Encryption](./ENCRYPTION.md).
+| Item | Status | Priority | Dependencies |
+|---|---|---|---|
+| Knowledge graph ingestion | Planned | P1 | Phase 2 |
+| Semantic search and retrieval | Planned | P1 | Knowledge graph |
+| Cross-session knowledge retention | Planned | P1 | Phase 2 |
 
-## Failure Modes
+---
 
-- Every failure surfaces through the Shared Context Engine and the audit log.
-- Degradation is preferred over hard failure whenever safety permits.
+## Long-Term (6–12 Months)
 
-Every failure emits a structured event on the Shared Context Engine and is recorded in the [Audit Log](./AUDIT_LOG.md).
+### Phase 5 — Merge & Guardian
 
-## Security Considerations
+| Item | Status | Priority | Dependencies |
+|---|---|---|---|
+| PR merge automation | Planned | P1 | Phase 3 |
+| Guardian (automated review) | Planned | P1 | Phase 3 |
+| Conflict resolution | Planned | P2 | Merge |
 
-- Trust boundary: crosses only through signed envelopes (see [Security Model](./SECURITY_MODEL.md)).
-- Secrets are read from [Secrets Management](./SECRETS_MANAGEMENT.md); never inlined.
-- All external calls go through [Model Providers](./MODEL_PROVIDERS.md) or the [Plugin SDK](./PLUGIN_SDK.md) — no ad-hoc network access.
+### Phase 6 — Voice & Multimodal
 
-## Observability
+| Item | Status | Priority | Dependencies |
+|---|---|---|---|
+| Voice input (speech-to-text) | Planned | P2 | Phase 1 |
+| Voice output (text-to-speech) | Planned | P2 | Voice input |
+| Image/video understanding | Planned | P2 | Phase 4 |
 
-- Metrics, traces, and logs conform to [Observability](./OBSERVABILITY.md), [Tracing](./TRACING.md), and [Logging](./LOGGING.md).
-- Every run carries a `correlation_id` propagated from the Kernel.
+### Phase 7 — v1.0 Release
 
-## Acceptance Criteria
+| Item | Status | Priority | Dependencies |
+|---|---|---|---|
+| API stability guarantee | Planned | P0 | All phases |
+| Production hardening | Planned | P0 | All phases |
+| Documentation and onboarding | Planned | P1 | v1.0 features |
 
-- The contracts above are testable via the [Eval Harness](./EVAL_HARNESS.md).
-- A change to this document requires a matching update to any dependent doc listed in *Related Documents*.
+---
 
-## Open Questions
+## Vision Items
 
-- _Track open questions as ADRs under [templates/ADR](../templates/ADR.md)._
+| Item | Status | Priority | Dependencies |
+|---|---|---|---|
+| Multi-tenant cloud | Backlog | P2 | Phase 7 |
+| Agent marketplace | Backlog | P2 | Phase 7, Plugin arch |
+| Fine-tuning pipeline | Backlog | P2 | Phase 4 |
+| Federated knowledge base | Backlog | P2 | Phase 4 |
+| Video input | Backlog | P3 | Phase 6 |
+
+---
+
+## Notes
+
+- **Phase 0** completed all infrastructure scaffolding (repo, CI, build system).
+- **Phase 1** is the primary focus; nothing ships before the kernel is stable.
+- Strategic priority is **correctness over velocity** — we invest in eval harness, tracing, and observability early.
+- Memory (Phase 2) is the highest-risk dependency for all later phases. We plan to prototype working memory alongside Phase 1 to de-risk.
+- Vision items are not committed — they will be re-evaluated at each phase boundary.
+
+---
 
 ## Related Documents
 
-- [System Overview](./SYSTEM_OVERVIEW.md)
-- [Main Ai Kernel](./MAIN_AI_KERNEL.md)
-- [Prd](./PRD.md)
-- [Trd](./TRD.md)
-- [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)
+- [Implementation Roadmap](./IMPL_ROADMAP.md)
+- [Project Vision](./VISION.md)
+- [Product Overview](./PRODUCT_OVERVIEW.md)
+- [PRD](./PRD.md)

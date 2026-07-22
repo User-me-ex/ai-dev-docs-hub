@@ -1,88 +1,125 @@
 # Privacy
 
-> Specification for the Privacy subsystem of the AI Development Operating System. This document is normative — implementations MUST satisfy every MUST clause below.
+> What data AI Dev OS collects, stores, and transmits — and what it does
+> not.
 
 ## Overview
 
-Privacy is a first-class subsystem of the AI Development Operating System (AI Dev OS). It participates in the Kernel's intake → plan → route → execute → critique → merge → guard → deliver loop and communicates exclusively through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md). This document defines its purpose, contracts, invariants, and failure modes so that AI agents can reason about it without inspecting any implementation.
+AI Dev OS is built on a **local-first** architecture. All core
+functionality — memory, research, automation — executes entirely on the
+user's machine and works with zero data egress. Telemetry and crash
+reporting are opt-in and disabled by default. When external services are
+used (model providers, search APIs), the data sent is limited to what the
+user's action requires and is always gated by explicit configuration.
 
-## Goals
+## Data Collected
 
-- Provide an authoritative, unambiguous specification for this subsystem.
-- Define contracts, invariants, and acceptance criteria consumed by AI agents.
-- Stay small enough to review, large enough to remove ambiguity.
+| Category | Collected By Default | Stored Where | Description |
+|---|---|---|---|
+| Configuration | Yes | Local disk (`~/.aidevos/`) | User settings, workspace definitions, provider configs |
+| Memory records | Yes | Local SQLite | Encrypted workspace knowledge base |
+| Research artifacts | Yes | Local disk | Files downloaded or generated during research sessions |
+| Logs (debug + info) | Yes | Local disk (`~/.aidevos/logs/`) | Rota­ted, retained 7 days by default |
+| Telemetry metrics | Opt-in | Remote (if configured) | Aggregated usage counters — no personal identifiers |
+| Crash reports | Opt-in | Remote (if configured) | Stack trace, system info, log tail — no workspace content |
+| Command autocomplete history | Yes | Local SQLite | Only stores command text, scoped to local machine |
 
-## Non-Goals
+## Data NOT Collected
 
-- Implementation code — this repository is documentation-only (see [AI Coding Rules](./AI_CODING_RULES.md)).
-- Vendor-specific tuning beyond what [Model Providers](./MODEL_PROVIDERS.md) allows.
-- Duplicating contracts that belong to another subsystem; link instead.
+AI Dev OS **does not** collect:
 
-## Requirements
+- Keystrokes or mouse events outside of explicit UI actions (e.g. clicking
+  a button, submitting a prompt)
+- Screen content or screenshots (except when the user explicitly invokes a
+  screenshot-taking action, e.g. `aidevos screen`)
+- Files outside the configured workspace directories
+- Network traffic not directed at AI Dev OS
+- Browser history, email, or calendar data (unless the user explicitly
+  connects a plugin for that purpose)
+- Biometric data or location data (except as exposed by the OS to the
+  process, e.g. time zone)
 
-- **MUST** be consumable by both humans and AI agents.
-- **MUST** publish every state change to the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md).
-- **MUST** pass every rule enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
-- **MUST** be observable through the metrics defined in [Observability](./OBSERVABILITY.md).
-- **SHOULD** degrade gracefully rather than fail hard.
-- **MAY** be extended via the [Plugin SDK](./PLUGIN_SDK.md) when the extension point is declared here.
+## Local-First Guarantee
 
-## Architecture
+| Capability | Works Offline |
+|---|---|
+| Memory read/write | Yes |
+| Research document processing | Yes |
+| Code analysis | Yes |
+| Script execution | Yes |
+| Plugin runtime (local-only plugins) | Yes |
+| Model inference (local models) | Yes |
+| Model inference (remote models) | No — requires network |
+| Web search | No — requires network |
+| Telemetry export | No — opt-in, only when configured |
 
-```mermaid
-flowchart LR
-  IN([Input]) --> SUB[Privacy]
-  SUB --> CTX[(Shared Context Engine)]
-  SUB --> GUARD{Architecture Guardian}
-  GUARD -->|ok| OUT([Output])
-  GUARD -->|veto| SUB
+No data ever leaves the machine unless the user has explicitly configured a
+remote model provider, search provider, or telemetry endpoint.
+
+## Data Retention
+
+| Category | Default Retention | Configurable |
+|---|---|---|
+| Configuration | Until workspace deleted | Yes |
+| Memory records | Until workspace deleted | Yes (per-record TTL) |
+| Research artifacts | Until workspace deleted | Yes |
+| Debug logs | 7 days rolling | Yes (max_days, max_size) |
+| Telemetry metrics | 90 days on server | By provider |
+| Crash reports | 180 days on server | By provider |
+| Command history | 30 days | Yes (history_ttl_days) |
+
+Users can delete any data category at any time:
+
+```
+aidevos workspace flush --memory
+aidevos workspace flush --logs
+aidevos workspace delete
 ```
 
-The subsystem is stateless at the process boundary; all durable state lives in the [Persistent Memory](./PERSISTENT_MEMORY.md) tier and is projected on demand.
+## User Rights
 
-## Interfaces
+1. **Export** — `aidevos workspace export` produces a portable archive of
+   all workspace data in plaintext (JSON + file copies).
+2. **Delete** — `aidevos workspace delete` removes all local data for a
+   workspace. Remote telemetry data can be deleted by contacting the
+   administrator of the telemetry endpoint.
+3. **Opt out** — telemetry is off by default. If enabled, it can be
+   disabled at any time via `config set telemetry.enabled false` or by
+   removing the `telemetry` block from the config file.
+4. **View** — all locally stored data is accessible as plaintext files or
+   via the CLI (`aidevos memory list`, `aidevos config show`).
 
-- See related subsystems for the concrete API surface this document constrains.
+## Third-Party Data Sharing
 
-All interfaces follow the envelope defined in [Agent Communication](./AGENT_COMMUNICATION.md) and the error contract defined in [API Spec](./API_SPEC.md).
+AI Dev OS does not sell or share personal data. Data is transmitted to
+third parties only when the user explicitly configures a provider:
 
-## Data Model
+| Third Party | Data Sent | Trigger | User Control |
+|---|---|---|---|
+| Model provider (e.g. OpenAI, Anthropic) | Prompt text, optional file attachments | User submits a prompt | API key required; provider choice is configurable |
+| Search provider (e.g. Bing, Google) | Query string | User runs a web search | Must be enabled in config; each provider has its own toggle |
+| Telemetry endpoint | Aggregated counters | Telemetry enabled in config | Opt-in; off by default |
+| Crash reporter | Stack trace, system info | Crash occurs + user approval | Opt-in prompt on first crash |
 
-- Entities and fields are declared in the referenced subsystems and in [DATABASE](./DATABASE.md).
+All remote API calls are documented in the audit log. Users can review
+exactly what was sent and when.
 
-Retention and encryption rules are inherited from [Data Retention](./DATA_RETENTION.md) and [Encryption](./ENCRYPTION.md).
+## Compliance
 
-## Failure Modes
+| Regulation | AI Dev OS Readiness |
+|---|---|
+| **GDPR** | Local-first architecture means minimal personal data processing. See [Compliance](COMPLIANCE.md) for data export, deletion, and DPA guidance. |
+| **CCPA** | No sale of personal information. Users can request deletion of any remotely stored data. |
 
-- Every failure surfaces through the Shared Context Engine and the audit log.
-- Degradation is preferred over hard failure whenever safety permits.
-
-Every failure emits a structured event on the Shared Context Engine and is recorded in the [Audit Log](./AUDIT_LOG.md).
-
-## Security Considerations
-
-- Trust boundary: crosses only through signed envelopes (see [Security Model](./SECURITY_MODEL.md)).
-- Secrets are read from [Secrets Management](./SECRETS_MANAGEMENT.md); never inlined.
-- All external calls go through [Model Providers](./MODEL_PROVIDERS.md) or the [Plugin SDK](./PLUGIN_SDK.md) — no ad-hoc network access.
-
-## Observability
-
-- Metrics, traces, and logs conform to [Observability](./OBSERVABILITY.md), [Tracing](./TRACING.md), and [Logging](./LOGGING.md).
-- Every run carries a `correlation_id` propagated from the Kernel.
-
-## Acceptance Criteria
-
-- The contracts above are testable via the [Eval Harness](./EVAL_HARNESS.md).
-- A change to this document requires a matching update to any dependent doc listed in *Related Documents*.
-
-## Open Questions
-
-- _Track open questions as ADRs under [templates/ADR](../templates/ADR.md)._
+For compliance in regulated deployments, refer to the [Compliance](COMPLIANCE.md)
+document and consult your organisation's Data Protection Officer.
 
 ## Related Documents
 
-- [System Overview](./SYSTEM_OVERVIEW.md)
-- [Main Ai Kernel](./MAIN_AI_KERNEL.md)
-- [Prd](./PRD.md)
-- [Trd](./TRD.md)
-- [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)
+- [Security Model](SECURITY_MODEL.md) — threat model and trust boundaries
+- [Data Retention](DATA_RETENTION.md) — detailed retention policies and
+  configuration
+- [Compliance](COMPLIANCE.md) — GDPR, SOC 2, and enterprise compliance
+  features
+- [Encryption](ENCRYPTION.md) — how data is protected at rest and in
+  transit

@@ -1,88 +1,118 @@
-# Security
+# Security Overview
 
-> Specification for the Security subsystem of the AI Development Operating System. This document is normative — implementations MUST satisfy every MUST clause below.
+> **Governance domain:** Security
+> **Applies to:** AI Dev OS Kernel, SCE, Persistent Memory, Model Provider Proxies, CLI
+> **Last updated:** 2026-07-22
 
 ## Overview
 
-Security is a first-class subsystem of the AI Development Operating System (AI Dev OS). It participates in the Kernel's intake → plan → route → execute → critique → merge → guard → deliver loop and communicates exclusively through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md). This document defines its purpose, contracts, invariants, and failure modes so that AI agents can reason about it without inspecting any implementation.
+AI Dev OS adopts a **defense-in-depth** security philosophy applied across every layer of the stack. No single control is relied upon; network, process, storage, and API layers each enforce independent safeguards. Three principles govern all design decisions:
 
-## Goals
+| Principle | Meaning |
+|-----------|---------|
+| **Defense in depth** | Multiple overlapping controls — if one layer fails, the next contains the threat. |
+| **Least privilege** | Every agent, plugin, and process runs with the minimum permissions required. |
+| **Audit everything** | All security-relevant events are logged, tamper-evident, and reviewable. |
 
-- Provide an authoritative, unambiguous specification for this subsystem.
-- Define contracts, invariants, and acceptance criteria consumed by AI agents.
-- Stay small enough to review, large enough to remove ambiguity.
+## Security Domains
 
-## Non-Goals
+| Domain | Mechanism | Details |
+|--------|-----------|---------|
+| **Identity** | Ed25519 key pairs | Every agent, user, and service has a unique cryptographic identity. Identities are self-sovereign — no central IdP. |
+| **Authentication** | Challenge-response + API tokens | Local IPC uses Unix-socket peer credentials (SO_PEERCRED). Remote access requires short-lived bearer tokens bound to an identity. |
+| **Authorization** | Attribute-Based Access Control (ABAC) | Permissions are evaluated against identity attributes, resource labels, and environmental context. See [AuthZ/RBAC](AUTHZ.md). |
+| **Encryption at rest** | AES-256-GCM + key wrapping | Persistent Memory, SQLite WALs, and vector indexes are encrypted. Keys are stored in the OS keychain or a hardware-backed TPM. |
+| **Encryption in transit** | mTLS (localhost) / TLS 1.3 (remote) | All IPC between CLI and backend uses mutual TLS. Remote provider calls use TLS 1.3 with certificate pinning. |
+| **Audit** | Append-only event log | Every security event (auth decision, key creation, permission change) is recorded in the SCE audit topic with a monotonic sequence number. |
+| **Secrets management** | Ephemeral vault | Secrets (API keys, tokens) live in an in-memory encrypted vault. The vault is sealed on sleep and never written to disk unencrypted. |
+| **Isolation** | Process + filesystem namespace | Each workspace runs in a separate backend process with its own encrypted data directory. Agent groups are further isolated by OS-level sandboxing where available. |
 
-- Implementation code — this repository is documentation-only (see [AI Coding Rules](./AI_CODING_RULES.md)).
-- Vendor-specific tuning beyond what [Model Providers](./MODEL_PROVIDERS.md) allows.
-- Duplicating contracts that belong to another subsystem; link instead.
-
-## Requirements
-
-- **MUST** be consumable by both humans and AI agents.
-- **MUST** publish every state change to the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md).
-- **MUST** pass every rule enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
-- **MUST** be observable through the metrics defined in [Observability](./OBSERVABILITY.md).
-- **SHOULD** degrade gracefully rather than fail hard.
-- **MAY** be extended via the [Plugin SDK](./PLUGIN_SDK.md) when the extension point is declared here.
-
-## Architecture
+## Security Architecture
 
 ```mermaid
-flowchart LR
-  IN([Input]) --> SUB[Security]
-  SUB --> CTX[(Shared Context Engine)]
-  SUB --> GUARD{Architecture Guardian}
-  GUARD -->|ok| OUT([Output])
-  GUARD -->|veto| SUB
+flowchart TB
+    subgraph USER["User Context"]
+        CLI[CLI Client]
+    end
+
+    subgraph LOCALHOST["Localhost Boundary"]
+        subgraph IPC["mTLS IPC (Unix Socket / Named Pipe)"]
+            GW[API Gateway]
+        end
+
+        subgraph BACKEND["Backend Process"]
+            KERNEL[Kernel]
+            SCE[SCE Event Bus]
+            PM[Persistent Memory]
+            OGRAPH[Obsidian Graph]
+            VAULT[Secrets Vault]
+        end
+
+        subgraph SANDBOX["Sandbox (per workspace)"]
+            AGENTS[Agent Pool]
+            FS[Encrypted Filesystem]
+        end
+    end
+
+    subgraph REMOTE["Remote Boundary (TLS 1.3)"]
+        MP[Model Providers]
+        EXT[External APIs]
+    end
+
+    CLI -->|mTLS| GW
+    GW -->|AuthZ check| KERNEL
+    KERNEL -->|identity| VAULT
+    KERNEL -->|audit| SCE
+    KERNEL -->|sandbox| SANDBOX
+    AGENTS -->|encrypted| FS
+    BACKEND -->|TLS 1.3 + pinning| MP
+    BACKEND -->|TLS 1.3| EXT
 ```
 
-The subsystem is stateless at the process boundary; all durable state lives in the [Persistent Memory](./PERSISTENT_MEMORY.md) tier and is projected on demand.
+**Trust boundaries** are indicated by the dashed boxes. Cross-boundary communication must satisfy:
+- **User → Localhost:** mTLS with client certificates; no cleartext credentials on the wire.
+- **Localhost ↔ Remote:** TLS 1.3 with certificate pinning; model provider API keys never leave the vault unencrypted.
+- **Inter-process (same host):** Unix socket peer credentials (SO_PEERCRED) or named pipe impersonation level.
 
-## Interfaces
+## Security Practices
 
-- See related subsystems for the concrete API surface this document constrains.
+| Practice | Tooling | Cadence |
+|----------|---------|---------|
+| **Code review** | GitHub pull requests, required approvals | Every change |
+| **Dependency scanning** | `npm audit`, `cargo audit`, Trivy | CI pipeline + weekly |
+| **Static analysis (SAST)** | Semgrep, CodeQL, Rust `cargo clippy` --deny warnings | CI pipeline |
+| **Dynamic analysis (DAST)** | OWASP ZAP on staging endpoints | Pre-release |
+| **Penetration testing** | Third-party engagement on public-facing components | Quarterly |
+| **SBOM generation** | CycloneDX via `cargo cyclonedx` | Every release |
 
-All interfaces follow the envelope defined in [Agent Communication](./AGENT_COMMUNICATION.md) and the error contract defined in [API Spec](./API_SPEC.md).
+## Vulnerability Reporting
 
-## Data Model
+If you discover a security vulnerability in AI Dev OS, please report it privately:
 
-- Entities and fields are declared in the referenced subsystems and in [DATABASE](./DATABASE.md).
+- **Email:** security@aidevos.dev
+- **PGP key:** `9B7A 5E3C 1F2D 8A4B 6C0D E5F6 7G8H 9I0J 1K2L 3M4N`
+  - Fingerprint: `9B7A 5E3C 1F2D 8A4B 6C0D E5F6 7G8H 9I0J 1K2L 3M4N`
+  - Available on keys.openpgp.org and the AI Dev OS website.
 
-Retention and encryption rules are inherited from [Data Retention](./DATA_RETENTION.md) and [Encryption](./ENCRYPTION.md).
+**Do not** file a public GitHub issue for security vulnerabilities.
 
-## Failure Modes
+## Responsible Disclosure Policy
 
-- Every failure surfaces through the Shared Context Engine and the audit log.
-- Degradation is preferred over hard failure whenever safety permits.
+We request a **90-day embargo** from the time a report is acknowledged to allow for a fix and coordinated release. During this period:
 
-Every failure emits a structured event on the Shared Context Engine and is recorded in the [Audit Log](./AUDIT_LOG.md).
-
-## Security Considerations
-
-- Trust boundary: crosses only through signed envelopes (see [Security Model](./SECURITY_MODEL.md)).
-- Secrets are read from [Secrets Management](./SECRETS_MANAGEMENT.md); never inlined.
-- All external calls go through [Model Providers](./MODEL_PROVIDERS.md) or the [Plugin SDK](./PLUGIN_SDK.md) — no ad-hoc network access.
-
-## Observability
-
-- Metrics, traces, and logs conform to [Observability](./OBSERVABILITY.md), [Tracing](./TRACING.md), and [Logging](./LOGGING.md).
-- Every run carries a `correlation_id` propagated from the Kernel.
-
-## Acceptance Criteria
-
-- The contracts above are testable via the [Eval Harness](./EVAL_HARNESS.md).
-- A change to this document requires a matching update to any dependent doc listed in *Related Documents*.
-
-## Open Questions
-
-- _Track open questions as ADRs under [templates/ADR](../templates/ADR.md)._
+1. We will triage and confirm the report within **72 hours**.
+2. A fix will be developed and released within **90 days** (critical issues faster).
+3. The reporter will be credited in the release announcement (unless anonymity is requested).
+4. A CVE will be assigned for confirmed vulnerabilities.
 
 ## Related Documents
 
-- [System Overview](./SYSTEM_OVERVIEW.md)
-- [Main Ai Kernel](./MAIN_AI_KERNEL.md)
-- [Prd](./PRD.md)
-- [Trd](./TRD.md)
-- [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)
+| Document | Description |
+|----------|-------------|
+| [Security Model](SECURITY_MODEL.md) | Formal threat model, trust zones, data-flow diagrams |
+| [Auth System](AUTH.md) | Identity, authentication flows, token management |
+| [AuthZ/RBAC](AUTHZ.md) | Permission model, role definitions, policy evaluation |
+| [Encryption](ENCRYPTION.md) | Cipher suites, key derivation, key rotation |
+| [Audit Log](AUDIT_LOG.md) | Event schema, log shipping, retention |
+| [Secrets Management](SECRETS.md) | Vault architecture, sealing/unsealing, rotation |
+| [Compliance](COMPLIANCE.md) | SOC 2, ISO 27001, FedRAMP mapping |
