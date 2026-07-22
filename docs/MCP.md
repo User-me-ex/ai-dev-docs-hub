@@ -1,89 +1,118 @@
-# Mcp
+# MCP — Model Context Protocol Integration
 
-> Specification for Model Context Protocol integration for tools and resources. This document is normative — implementations MUST satisfy every MUST clause below.
+> AI Dev OS speaks **MCP** as both **client** and **server** so external tools, resources, and prompt libraries plug into the Kernel with zero bespoke glue.
 
 ## Overview
 
-Mcp is a first-class subsystem of the AI Development Operating System (AI Dev OS). It participates in the Kernel's intake → plan → route → execute → critique → merge → guard → deliver loop and communicates exclusively through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md). This document defines its purpose, contracts, invariants, and failure modes so that AI agents can reason about it without inspecting any implementation.
+MCP (Model Context Protocol) is the interop layer that lets AI Dev OS expose its own capabilities (memory, context, knowledge, tools) to external agents and consume capabilities from external MCP servers (GitHub, filesystem, Obsidian vaults, IDE bridges, custom tools). Every MCP call goes through the [Main AI Kernel](./MAIN_AI_KERNEL.md) so it is authenticated, budgeted, and audited.
 
 ## Goals
 
-- Speak MCP as both client and server.
-- Tool discovery mirrors Nine Router UX.
-- Every MCP call is audited.
+- First-class MCP client and MCP server, both over stdio and HTTP/SSE transports.
+- Tool and resource discovery uses the same UX as the [Nine Router](./NINE_ROUTER.md): search, filter, refresh, assign.
+- Every MCP call is audited with request/response envelopes.
+- Zero-config for local MCP servers on the machine; explicit consent required for remote servers.
 
 ## Non-Goals
 
-- Implementation code — this repository is documentation-only (see [AI Coding Rules](./AI_CODING_RULES.md)).
-- Vendor-specific tuning beyond what [Model Providers](./MODEL_PROVIDERS.md) allows.
-- Duplicating contracts that belong to another subsystem; link instead.
+- Reimplementing the MCP spec — we conform to the upstream spec version pinned in [Versioning](./VERSIONING.md).
+- Ad-hoc RPC — non-MCP tool integrations use the [Plugin SDK](./PLUGIN_SDK.md).
 
 ## Requirements
 
-- **MUST** be consumable by both humans and AI agents.
-- **MUST** publish every state change to the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md).
-- **MUST** pass every rule enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
-- **MUST** be observable through the metrics defined in [Observability](./OBSERVABILITY.md).
-- **SHOULD** degrade gracefully rather than fail hard.
-- **MAY** be extended via the [Plugin SDK](./PLUGIN_SDK.md) when the extension point is declared here.
+- **MUST** support MCP transports: `stdio`, `sse`, `streamable-http`.
+- **MUST** expose the following as MCP resources on the server side:
+  - `memory://…` — read-only projection of [Persistent Memory](./PERSISTENT_MEMORY.md).
+  - `context://<topic>` — snapshot + tail of a [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md) topic.
+  - `knowledge://<kb>/…` — layered knowledge base access (Global, Main, Group, Individual).
+  - `graph://…` — Obsidian graph queries via [Obsidian Graph Engine](./OBSIDIAN_GRAPH_ENGINE.md).
+- **MUST** expose the following as MCP tools:
+  - `plan.submit(goal)` → run_id
+  - `router.assign(role, model_id)`
+  - `memory.query(q)` / `memory.write(entry)` (write requires elevated capability)
+  - `research.search(q)` (via [Research Engine](./RESEARCH_ENGINE.md))
+- **MUST** require explicit user consent for each remote MCP server on first use; consent is persisted.
+- **MUST** run every MCP tool call under a capability token issued by the Kernel.
+- **SHOULD** discover local MCP servers via a `~/.aidevos/mcp.d/` config directory.
+- **MAY** proxy MCP servers behind a single aggregated endpoint for downstream agents.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  IN([Input]) --> SUB[Mcp]
-  SUB --> CTX[(Shared Context Engine)]
-  SUB --> GUARD{Architecture Guardian}
-  GUARD -->|ok| OUT([Output])
-  GUARD -->|veto| SUB
+  subgraph OS[AI Dev OS]
+    K[Kernel] --> MCPC[MCP Client]
+    K --> MCPS[MCP Server]
+    MCPS --> MEM[(Memory)]
+    MCPS --> CTX[(Context)]
+    MCPS --> KB[(Knowledge)]
+  end
+  MCPC -- stdio --> LOCAL[Local MCP tool]
+  MCPC -- SSE --> REMOTE[Remote MCP server]
+  IDE[External Agent / IDE] -- MCP --> MCPS
 ```
 
-The subsystem is stateless at the process boundary; all durable state lives in the [Persistent Memory](./PERSISTENT_MEMORY.md) tier and is projected on demand.
+## Client interface
 
-## Interfaces
+```
+mcp.connect(server: McpServerRef) → session
+mcp.list_tools(session) → Tool[]
+mcp.list_resources(session) → Resource[]
+mcp.call(session, tool, args) → ToolResult
+mcp.read(session, uri) → ResourceContent
+```
 
-- MCP server exposes memory, context, and knowledge as resources.
-- MCP client wraps external tool servers.
+## Server interface (what we expose)
 
-All interfaces follow the envelope defined in [Agent Communication](./AGENT_COMMUNICATION.md) and the error contract defined in [API Spec](./API_SPEC.md).
+```
+tools/list           → the Tools table above
+tools/call           → dispatched through Kernel with capability check
+resources/list       → memory://, context://, knowledge://, graph://
+resources/read       → snapshot + optional watch
+prompts/list         → canonical prompts from ../prompts/
+prompts/get          → hydrated with session variables
+```
 
 ## Data Model
 
-- Standard MCP envelopes; no custom extensions unless namespaced.
+Standard MCP envelopes; no custom extensions unless namespaced under `x-aidevos-*`. Consent records:
 
-Retention and encryption rules are inherited from [Data Retention](./DATA_RETENTION.md) and [Encryption](./ENCRYPTION.md).
+```
+McpConsent {
+  server: { name, transport, endpoint }
+  granted_at: rfc3339
+  granted_by: user_id
+  scopes: string[]
+  expires_at?: rfc3339
+}
+```
 
 ## Failure Modes
 
-- Peer unreachable → mark tool degraded, keep others live.
+| Mode                    | Response                                                                 |
+| ----------------------- | ------------------------------------------------------------------------ |
+| Peer unreachable        | Mark server `degraded`, keep other servers live, retry with backoff       |
+| Schema mismatch         | Reject call with typed error, alert operator, keep server enabled        |
+| Consent revoked         | Terminate session cleanly, invalidate cached capabilities                |
+| Tool timeout            | Cancel underlying call, return `MCP_TIMEOUT`, do not retry writes        |
 
-Every failure emits a structured event on the Shared Context Engine and is recorded in the [Audit Log](./AUDIT_LOG.md).
+## Security
 
-## Security Considerations
-
-- Trust boundary: crosses only through signed envelopes (see [Security Model](./SECURITY_MODEL.md)).
-- Secrets are read from [Secrets Management](./SECRETS_MANAGEMENT.md); never inlined.
-- All external calls go through [Model Providers](./MODEL_PROVIDERS.md) or the [Plugin SDK](./PLUGIN_SDK.md) — no ad-hoc network access.
+- Every remote MCP server is treated as **untrusted** input; results MUST pass through the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md) before they can influence a plan.
+- Capabilities are least-privilege: a tool that only needs `memory.query` never sees `memory.write`.
+- All MCP I/O is recorded in the [Audit Log](./AUDIT_LOG.md).
+- Secrets required by an MCP server are injected via [Secrets Management](./SECRETS_MANAGEMENT.md); never handed to the peer.
 
 ## Observability
 
-- Metrics, traces, and logs conform to [Observability](./OBSERVABILITY.md), [Tracing](./TRACING.md), and [Logging](./LOGGING.md).
-- Every run carries a `correlation_id` propagated from the Kernel.
+Metrics: `mcp_call_total{server,tool,ok}`, `mcp_call_seconds{server,tool}`, `mcp_active_sessions{server}`. See [Observability](./OBSERVABILITY.md).
 
 ## Acceptance Criteria
 
-- The contracts above are testable via the [Eval Harness](./EVAL_HARNESS.md).
-- A change to this document requires a matching update to any dependent doc listed in *Related Documents*.
-
-## Open Questions
-
-- _Track open questions as ADRs under [templates/ADR](../templates/ADR.md)._
+- Connecting the official filesystem MCP server, listing its tools, and calling `read_file` succeeds end-to-end.
+- Revoking consent immediately terminates the session and rejects the next tool call.
+- Exposing `memory://recent` and reading it from a third-party MCP client returns a valid resource.
 
 ## Related Documents
 
-- [Tool Calling](./TOOL_CALLING.md)
-- [Plugin Sdk](./PLUGIN_SDK.md)
-- [Agent Communication](./AGENT_COMMUNICATION.md)
-- [System Overview](./SYSTEM_OVERVIEW.md)
-- [Main Ai Kernel](./MAIN_AI_KERNEL.md)
-- [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)
+- [Tool Calling](./TOOL_CALLING.md) · [Plugin SDK](./PLUGIN_SDK.md) · [Agent Communication](./AGENT_COMMUNICATION.md) · [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md) · [Persistent Memory](./PERSISTENT_MEMORY.md) · [Main AI Kernel](./MAIN_AI_KERNEL.md) · [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)
