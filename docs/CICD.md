@@ -144,6 +144,22 @@ CI uses the following environment variables:
 | `DOCKER_USERNAME` / `DOCKER_PASSWORD` | Registry auth for Docker push | GitHub secrets |
 | `NPM_TOKEN` | npm publish auth | GitHub secrets |
 
+## Observability
+
+| Metric | Labels | Description |
+|--------|--------|-------------|
+| `cicd_pipeline_duration_seconds` | `stage`, `trigger` | Pipeline stage wall-clock duration |
+| `cicd_pipeline_total` | `stage`, `result` | Pipeline runs by stage and result (success/fail/skip) |
+| `cicd_build_artifact_size_bytes` | `platform` | Compiled binary size per platform |
+| `cicd_test_coverage_percent` | `suite` | Code coverage from unit test runs |
+| `cicd_benchmark_regression_delta` | `benchmark_name` | Percentage change vs baseline |
+| `cicd_runner_queue_seconds` | `runner_type` | Time jobs spend waiting for a runner |
+| `cicd_security_vulnerabilities` | `severity`, `tool` | Vulnerability count per scan |
+
+Traces: one span per CI job, with child spans for each stage step and external API call (npm, cargo, Docker registry).
+
+Logs: structured JSON logs at each stage boundary — `{ "stage": "unit", "result": "pass", "duration_ms": 42000, "commit": "abc123" }`.
+
 ## Failure Modes
 
 | Mode | Detection | Response |

@@ -156,6 +156,22 @@ consensus.history(run_id, topic?) → ConsensusRound[]
 | Topic duplication | Two overlapping consensus rounds active | Cancel later round; merge into earlier round's result |
 | Unanimous block | Any agent rejects safety-critical decision | Escalate to human with full context; freeze in-progress work |
 
+## Observability
+
+| Metric | Labels | Description |
+|--------|--------|-------------|
+| `consensus_round_total` | `protocol`, `result` | Consensus rounds by protocol and result |
+| `consensus_vote_total` | `protocol` | Votes cast across all rounds |
+| `consensus_round_duration_seconds` | `protocol` | Wall-clock duration per round |
+| `consensus_participation_ratio` | `protocol` | Fraction of eligible agents that voted |
+| `consensus_stalemate_total` | `protocol` | Rounds that reached MAX_ROUNDS without majority |
+| `consensus_escalation_total` | `reason` | Rounds escalated to Kernel or human |
+| `consensus_vote_discard_total` | `reason` | Votes discarded (inconsistent, duplicate, late) |
+
+Traces: one span per consensus round, with child spans for propose, each vote receipt, tabulation, and result broadcast.
+
+Events: `consensus.round_completed { round_id, protocol, result, winner, duration_ms }` published on SCE.
+
 ## Performance Budget
 
 | Operation | p99 Target |

@@ -355,6 +355,89 @@ flowchart LR
 - [ ] Supply chain attestation (Sigstore) in place for all releases
 - [ ] `aidevos security --audit` command reports all controls green
 
+## Examples
+
+### Example 1: API key rotation
+
+```bash
+# Operator detects a model provider API key is approaching its 90-day rotation deadline
+# Alert from security observability metric `security.key.rotation_age_days` (p95 > 85 days)
+
+# Step 1: Generate a new API key at the provider's console
+# Step 2: Update the vault without restarting the backend
+aidevos secrets set openai_api_key --value "sk-new-..."
+
+# Step 3: The new key is picked up immediately by the ProviderAdapter
+# The old key is zeroed from the in-memory vault
+# The rotation is recorded in the Audit Log with:
+#   - event: "secret.rotated"
+#   - target: "openai_api_key"
+#   - initiated_by: "operator@example.com"
+#   - timestamp: 2026-07-22T14:30:00Z
+
+# Step 4: Verify the new key works
+aidevos models refresh --provider openai
+# Expected: model list returned within 5 s, no auth errors
+
+# Step 5: Revoke the old key at the provider's console
+# The Audit Log now contains an immutable rotation trail for compliance review
+```
+
+### Example 2: Audit log review after suspected incident
+
+```bash
+# SOC analyst reviews security events around a suspected data exfiltration
+
+# Query the audit log for all security-relevant events in the past 24 hours
+aidevos audit query --since "24h" --category security
+
+# Sample output:
+# seq=12831  event=auth.failure           identity="unknown"      timestamp=14:22:03Z
+# seq=12832  event=auth.failure           identity="unknown"      timestamp=14:22:04Z
+# seq=12833  event=auth.failure           identity="unknown"      timestamp=14:22:05Z
+# seq=12834  event=vault.access           identity="agent-beta"   timestamp=14:22:06Z
+# seq=12835  event=memory.export          identity="agent-beta"   timestamp=14:22:10Z
+
+# Escalation path:
+# 1. 10 auth failures in 1 minute from the same IP → anomaly alert triggered
+# 2. Agent-beta's vault access coincided with the failures → possible credential stuffing
+# 3. Automated containment: revoke agent-beta's capability tokens
+# 4. Forensic export of agent-beta's session logs for postmortem
+
+# Verify containment
+aidevos audit query --event vault.access --identity "agent-beta" --since "5m"
+# Expected: no vault access events after revocation timestamp
+```
+
+### Example 3: Encryption at rest verification
+
+```bash
+# Compliance auditor verifies that all Persistent Memory stores are encrypted
+
+# Check encryption status of the workspace data directory
+aidevos security --audit --scope encryption
+
+# Expected output:
+# ┌──────────────────────┬──────────┬────────────────┬──────────┐
+# │ Store                │ Cipher   │ Key Source     │ Status   │
+# ├──────────────────────┼──────────┼────────────────┼──────────┤
+# │ Persistent Memory    │ AES-256  │ OS Keychain    │ PASS     │
+# │ Vector Index (HNSW)  │ AES-256  │ Workspace Key  │ PASS     │
+# │ FTS5 Index           │ AES-256  │ Workspace Key  │ PASS     │
+# │ Audit Log            │ Ed25519  │ Immutable      │ PASS     │
+# │ Backup Archive       │ AES-256  │ Backup Key     │ PASS     │
+# └──────────────────────┴──────────┴────────────────┴──────────┘
+
+# If a store reports FAIL:
+# 1. Determine if the store is in plaintext (e.g., pre-encryption migration)
+# 2. Run encryption migration: aidevos security encrypt --store vector_index
+# 3. Re-verify: aidevos security --audit --scope encryption --store vector_index
+# 4. Document the remediation in the compliance report
+
+# For SOC 2 evidence collection, export the full audit report
+aidevos security --audit --format json --output security-audit-2026-07-22.json
+```
+
 ---
 
 ## Related Documents

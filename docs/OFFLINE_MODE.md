@@ -115,6 +115,10 @@ Offline operation never requires special storage handling — all stores are loc
 | Network restored mid-session | Connectivity probe success | Dashboard clears badge; next model discovery includes cloud providers |
 | Nine Router unreachable | Kernel startup probe | Kernel exits with diagnostic; user fixes Nine Router |
 | Partial network (DNS fails, HTTPS works) | Provider-specific failures | Individual provider badges |
+| Configuration file corruption | TOML parse error on startup | Fall back to defaults; log WARN; run `aidevos doctor --repair` |
+| Local model not installed | Nine Router returns 502 for local model | Show dashboard warning with install instructions; suggest fallback to alternative local model |
+| Disk space exhaustion | Writes fail with SQLITE_FULL | Log CRITICAL; display dashboard alert; suggest cache cleanup or data directory expansion |
+| Cache corruption on power loss | Checksum mismatch on cache read | Invalidate corrupted cache entries; re-fetch on next request; log ERROR |
 
 ## Security Considerations
 
@@ -129,6 +133,20 @@ Offline operation never requires special storage handling — all stores are loc
 3. The dashboard shows "Offline" indicator when network is disconnected
 4. Switching from offline to online, Nine Router discovers cloud models within one refresh interval
 5. `aidevos doctor` reports all subsystems healthy in offline mode
+
+## Observability
+
+| Metric | Labels | Description |
+|--------|--------|-------------|
+| `offline_mode_current` | — | Gauge: 1 if offline, 0 if online |
+| `offline_transition_total` | `direction` | Count of transitions (offline→online, online→offline) |
+| `offline_uptime_seconds` | — | Duration of current offline session |
+| `offline_model_inference_total` | `model`, `result` | Local inference count and result (success/fail) |
+| `offline_cache_hit_ratio` | `cache_type` | Hit ratio for offline caches (model catalog, web search) |
+| `offline_provider_probe_seconds` | `provider` | Latency of provider availability probes |
+| `offline_queue_depth` | `queue` | Number of queued sync/write operations pending reconnect |
+
+Events: `offline.mode_changed { from: "online", to: "offline", reason: "network_timeout" }` published on SCE.
 
 ## Related Documents
 

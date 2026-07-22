@@ -144,6 +144,35 @@ send_interval_sec = 300                   # 5 minutes
 | Network proxy required | HTTP 407 | Log WARN with proxy config hint; do not bypass proxy automatically |
 | GDPR consent withdrawal | User calls disable | Clear buffer immediately; stop all sends; persist config change |
 
+## Security Considerations
+
+### PII Handling
+
+Telemetry MUST NOT collect any personally identifiable information. The following controls are in place:
+
+1. **Field-level allowlist**: Only fields explicitly listed in the [Collected Data](#collected-data) section may be transmitted. Any new field requires a spec change and maintainer review.
+2. **Pre-transmission filter**: Before serialization, every event is run through a schema validator that drops any field not in the allowlist. Unknown fields are logged and discarded.
+3. **Process ID isolation**: The `process_id` is a random UUID generated at install time. It is NOT derived from any hardware identifier, MAC address, hostname, or user credential. It cannot be used to correlate events across different installations.
+4. **Locale truncation**: Only language and region (e.g., `en-US`) are collected. Never full locale strings that might contain user-configured custom formats.
+
+### Opt-Out Enforcement
+
+1. **Immediate effect**: When the user runs `aidevos telemetry disable`, the telemetry subsystem MUST stop all outbound network requests within 1 second. The in-memory buffer is cleared immediately.
+2. **Persistence**: The disabled state is written to `~/.config/aidevos/config.toml` synchronously. On restart, the subsystem reads this value before initializing the network client.
+3. **No silent re-enable**: No update, upgrade, or config migration may re-enable telemetry without explicit user consent. The `enabled` field is preserved across upgrades.
+4. **Audit trail**: Every enable/disable transition is logged to the local [Audit Log](./AUDIT_LOG.md) with timestamp and actor (CLI or API caller).
+
+### Data in Transit
+
+1. **TLS required**: All telemetry data is transmitted over HTTPS (TLS 1.2+). The collector endpoint URL is hard-coded to `https://telemetry.aidevos.dev/v1/events`. HTTP is never used.
+2. **Certificate pinning** (optional): The binary MAY include a pinned certificate for the collector endpoint to prevent MITM interception. This is configured at build time.
+3. **No PII in URLs**: Event data is sent as POST body, never in URL query parameters (which may be logged by proxies).
+
+### Data at Rest
+
+1. **No local storage**: Telemetry events are held in an in-memory buffer. They are never written to disk except as transient buffer files in encrypted temp storage on low-memory systems.
+2. **Collector retention**: Raw events are retained for 90 days, then purged. Aggregated statistics are retained for 24 months. Both retention periods are enforced by automated jobs.
+
 ## Performance Budget
 
 | Operation | p99 Target |

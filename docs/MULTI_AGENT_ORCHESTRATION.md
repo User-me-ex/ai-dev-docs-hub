@@ -175,6 +175,32 @@ if (lock.status === "acquired") {
 | `merge.commit(resource_id, version)` | Commit changes and release the lock. |
 | `merge.status(resource_id)` | Check lock status and current version. |
 
+## Failure Modes
+
+| Mode | Detection | Response |
+|------|-----------|----------|
+| Agent deadlock | Two agents each hold a lock on a resource the other needs | Deadlock detector (background thread) identifies cycle; break by force-releasing lock on lower-priority agent; escalate to Kernel |
+| Message loss | Gap in SCE event sequence numbers | Re-request missing events from SCE event log; if unavailable, proceed with best-effort state reconstruction |
+| Timeout cascade | One agent's timeout triggers re-dispatch, which triggers further timeouts | Inject jitter into re-dispatch delay (1–5 s random); cap cascade depth at 3; escalate to human if exceeded |
+| Resource starvation | All workers in pool are blocked on I/O or lock acquisition | Shed non-critical tasks; expand pool if configured with headroom; log CRITICAL if pool exhausted > 30 s |
+| Split-brain (coordination failure) | Two agents independently believe they hold the same lock | SCE lock state is authoritative: agents must verify lock ownership before every write; detect conflict during merge.commit |
+| Unhandled agent crash with dirty state | Agent terminates mid-write without releasing resources | Heartbeat monitor detects failure within 30 s; lease-based locks auto-release after TTL expiry (default 30 s) |
+| Coordination topic saturation | > 1000 events/s on a single coordination topic | Throttle event publishing; partition topic by sub-task; scale SCE broker if sustained |
+
+## Observability
+
+| Metric | Labels | Description |
+|--------|--------|-------------|
+| `orchestration_active_agents` | `pattern` | Gauge: number of currently active agents by coordination pattern |
+| `orchestration_task_duration_seconds` | `task_type`, `result` | Wall-clock duration per sub-task |
+| `orchestration_message_total` | `event_type` | Messages exchanged between agents by event type |
+| `orchestration_lock_contention_ratio` | `resource_type` | Fraction of merge.begin calls that returned ErrResourceLocked |
+| `orchestration_deadlock_total` | — | Count of deadlock cycles detected and resolved |
+| `orchestration_pool_utilization` | `pool_name` | Percentage of worker pool slots in use |
+| `orchestration_barrier_wait_seconds` | `barrier_id` | Time all agents waited at a synchronization barrier |
+
+Traces: one trace per multi-agent run, with a root span for the Kernel dispatch and child spans for each agent's task execution, merge operations, and barrier synchronization.
+
 ## Related Documents
 
 | Document | Description |

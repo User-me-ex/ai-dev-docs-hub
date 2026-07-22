@@ -4,7 +4,7 @@
 
 ## Topology 1 — Single Developer Machine (Default)
 
-The standard installation: one binary, one SQLite database, local models via Ollama, optional cloud provider keys.
+The standard installation: one binary, one SQLite database, local models via Ollama, optional cloud provider keys. All model access flows through Nine Router.
 
 ```mermaid
 flowchart TB
@@ -27,7 +27,11 @@ flowchart TB
       VAULT[("Workspace vault\nMarkdown files")]
     end
 
-    subgraph LOCAL_MODELS["Local AI (Ollama)"]
+    subgraph GATEWAY["Model Gateway"]
+      NR[Nine Router\nlocalhost:20128/v1]
+    end
+
+    subgraph LOCAL_MODELS["Local AI (default)"]
       OLLAMA[Ollama\nlocalhost:11434]
       WHISPER[Whisper\nlocal STT]
       PIPER[Piper\nlocal TTS]
@@ -41,18 +45,19 @@ flowchart TB
 
     CLIENTS -- IPC/HTTP --> HTTP_SRV
     HTTP_SRV --> KERNEL
-    KERNEL --> LOCAL_MODELS
+    KERNEL -->|"POST /v1/chat/completions"| NR
+    NR --> LOCAL_MODELS
     KERNEL --> STORAGE
   end
 
-  subgraph CLOUD_OPT["Cloud Providers (optional, API keys required)"]
-    OAI[OpenAI API]
-    ANT[Anthropic API]
-    GOO[Google AI API]
-    MIS[Mistral API]
+  subgraph CLOUD_OPT["Cloud Providers (optional, configured in Nine Router)"]
+    OAI[OpenAI]
+    ANT[Anthropic]
+    GOO[Google]
+    MIS[Mistral]
   end
 
-  KERNEL -. HTTPS .-> CLOUD_OPT
+  NR -. HTTPS .-> CLOUD_OPT
 ```
 
 **Characteristics:**
@@ -65,7 +70,7 @@ flowchart TB
 
 ## Topology 2 — Team Server (LAN / VPN)
 
-One shared `aidevos-server` accessible to multiple developers on the same network. NATS replaces SQLite as the SCE backend for concurrent write performance.
+One shared `aidevos-server` accessible to multiple developers on the same network. NATS replaces SQLite as the SCE backend for concurrent write performance. All model access flows through Nine Router.
 
 ```mermaid
 flowchart TB
@@ -99,16 +104,21 @@ flowchart TB
   DEV_A -- HTTPS --> HTTP2
   DEV_B -- HTTPS --> HTTP2
 
+  subgraph GATEWAY2["Model Gateway"]
+    NR2[Nine Router\nlocalhost:20128/v1]
+  end
+  KERNEL2 -->|"POST /v1/chat/completions"| NR2
+
   subgraph LOCAL_AI["Local AI on server"]
     OLLAMA2[Ollama]
   end
-  KERNEL2 --> OLLAMA2
+  NR2 --> OLLAMA2
 
-  subgraph CLOUD2["Cloud Providers"]
+  subgraph CLOUD2["Cloud Providers (optional)"]
     OAI2[OpenAI]
     ANT2[Anthropic]
   end
-  KERNEL2 -. HTTPS .-> CLOUD2
+  NR2 -. HTTPS .-> CLOUD2
 ```
 
 **Characteristics:**
@@ -142,10 +152,14 @@ flowchart TB
     REDIS_QUEUE[(Redis\nqueue backend)]
   end
 
+  subgraph GATEWAY["Model Gateway"]
+    NR_CLUSTER[Nine Router\nlocalhost:20128/v1]
+  end
+
   subgraph AI_BACKENDS["AI Backends"]
     OLLAMA_FARM[GPU Server Farm\nOllama cluster]
-    OAI3[OpenAI API]
-    ANT3[Anthropic API]
+    OAI3[OpenAI]
+    ANT3[Anthropic]
   end
 
   subgraph OBSERVABILITY["Observability Stack"]
@@ -157,7 +171,8 @@ flowchart TB
 
   LB --> AIDEVOS_CLUSTER
   AIDEVOS_CLUSTER --> MANAGED_INFRA
-  AIDEVOS_CLUSTER --> AI_BACKENDS
+  AIDEVOS_CLUSTER -->|"POST /v1/chat/completions"| NR_CLUSTER
+  NR_CLUSTER --> AI_BACKENDS
   AIDEVOS_CLUSTER --> OBSERVABILITY
 ```
 

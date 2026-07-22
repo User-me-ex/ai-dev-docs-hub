@@ -39,6 +39,30 @@ AI Dev OS uses a **hybrid retrieval** strategy that combines three complementary
                 └──────────────┘
 ```
 
+## Flow Diagram
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant K as Kernel
+    participant NR as Nine Router
+    participant EM as Embedding Model
+    participant VS as Vector Store
+    participant G as Generator
+
+    U->>K: Query
+    K->>NR: route(user_input, role)
+    NR->>EM: embed(query)
+    EM-->>NR: query_vector
+    NR->>VS: retrieve(query_vector, top_k)
+    VS-->>NR: Chunk[]
+    NR->>NR: RRF fusion + context assembly
+    NR->>G: generate(prompt + context)
+    G-->>NR: Response stream
+    NR-->>K: Streamed answer
+    K-->>U: Final response
+```
+
 ## Query Flow
 
 ```
@@ -186,6 +210,24 @@ Chunks are stored in the Knowledge System and referenced by the BM25 FTS5 index 
 | `rag_chunks_retrieved` | Histogram | source (bm25/ann/graph) |
 | `rag_context_tokens` | Histogram | status (truncated/full) |
 | `rag_no_results_total` | Counter | reason (all_empty/budget_exceeded) |
+
+## Security Considerations
+
+- **Document access control:** Retrieval respects workspace and group-level permissions. A query scoped to a project only returns chunks from documents the caller is authorized to read.
+- **PII stripping:** Before indexing, documents pass through a PII detector that redacts emails, phone numbers, and credit card patterns. Redaction is configurable per workspace.
+- **Index encryption:** The BM25 FTS5 index and ANN HNSW index are encrypted at rest using AES-256-GCM. Encryption keys are managed by the Key Manager and never stored alongside the index files.
+- **Prompt injection prevention:** Retrieved context is sanitized before insertion into the generation prompt. Control characters, embedded instructions, and delimiter-conflicting patterns are escaped or stripped.
+- **Audit trail:** Every retrieval operation — query text, embedding vector (hash), result count, and generation timestamp — is recorded in the Audit Log for forensic review.
+
+See [Security Overview](./SECURITY.md) and [Encryption](./ENCRYPTION.md).
+
+## Acceptance Criteria
+
+- A hybrid query against a populated KB returns results within 2 seconds covering all three signals (BM25, ANN, Graph) with RRF scores present on every chunk.
+- PII redaction removes at least 95% of known PII patterns from indexed documents without producing false-positive content loss.
+- A query with no relevant content in the KB returns an empty result set (not a hallucinated answer) with a `no_results` status flag.
+- Context assembly respects the token budget: an assembled context never exceeds the configured `budget` parameter by more than 5%.
+- Unplugging the Vector Store mid-query causes the pipeline to fall back to BM25 + Graph signals only and logs a warning — the query does not fail.
 
 ## Related Documents
 

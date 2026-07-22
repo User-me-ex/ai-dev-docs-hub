@@ -299,6 +299,71 @@ Traces: one span per job run, with child spans for fetch, parse, dedup, diff, an
 - A `knowledge.stale` event with `urgency: "high"` triggers a re-crawl within 30 s regardless of `min_recheck_interval`.
 - Pausing and resuming a scheduled job preserves the cadence — the next run fires at the expected next slot after resumption.
 
+## Examples
+
+### Example 1: Scheduled documentation crawl
+
+```typescript
+// Schedule a weekly crawl of FastAPI documentation
+const job = await research.schedule(
+  {
+    type: "http_docs",
+    url: "https://fastapi.tiangolo.com/",
+    depth: 2,
+    selectors: ["article", "main"],
+  },
+  { cadence: "0 6 * * 1", kb_target: "main", tags: ["docs", "python", "fastapi"] }
+);
+
+// On each run:
+// 1. Fetcher crawls https://fastapi.tiangolo.com/ depth 2
+// 2. Parser converts HTML → structured Markdown
+// 3. Deduplicator compares against existing `research_source:https://fastapi.tiangolo.com/` entry
+// 4. If changed: Diff summariser produces "What's new" summary via the `researcher` model
+// 5. KB Writer upserts with tags ["research_source:https://fastapi.tiangolo.com/", "research_job:<job_id>"]
+// 6. SCE emits `research.completed` with the new ResearchArtifact
+```
+
+### Example 2: On-demand GitHub release monitoring
+
+```typescript
+// User requests research on latest LangChain releases
+const job = await research.enqueue(
+  {
+    type: "github_repo",
+    repo: "langchain-ai/langchain",
+    depth: 1,
+  },
+  { kb_target: "global", tags: ["langchain", "releases"] }
+);
+
+// research.status(job.id) streams the pipeline stages:
+//   enqueued → fetching → parsing → deduplicating → writing
+// When status returns "completed", the artifact contains:
+//   - summary: "LangChain v0.3.0 released with new tool-calling API..."
+//   - diff_summary: "Breaking change: tool calling now requires explicit `tool_choice`..."
+//   - model_used: "claude-sonnet-4"
+//   - confidence: 0.92
+```
+
+### Example 3: Reactive freshness triggered by an agent
+
+```typescript
+// Agent detects stale KB entry about Anthropic API
+await sce.publish("knowledge.stale", {
+  kb_entry_id: "01J3XYZ...",
+  reason: "Anthropic docs reference 'max_tokens' which was renamed to 'max_output_tokens'",
+  urgency: "high",
+  requester: { id: "agent-alpha", role: "developer" }
+});
+
+// Research Engine subscribes to `knowledge.stale`
+// High urgency bypasses min_recheck_interval gate
+// Immediate targeted re-crawl of the source URL from the KB entry's `research_source:<url>` tag
+// Diff summariser detects the `max_tokens` → `max_output_tokens` rename
+// KB entry updated with new summary and changed: true
+```
+
 ## Open Questions
 
 - Whether diff summaries should be stored as separate KB entries (with `kind: "research_diff"`) or as a field on the existing entry — tracked in [templates/ADR](../templates/ADR.md).

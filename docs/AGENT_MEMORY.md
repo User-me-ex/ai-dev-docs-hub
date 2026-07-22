@@ -169,6 +169,50 @@ await agent.remember(
 // This is automatically published to the SCE shared topic and visible to all agents in the group.
 ```
 
+## Failure Modes
+
+| Mode | Detection | Response |
+|------|-----------|----------|
+| Corrupt recall | Memory retrieval returns malformed or incomplete data | Validate each entry against schema; drop corrupt entries; log warning; re-consolidate from raw observations |
+| Stale context | Tier 2 Short-Term Memory contains outdated information beyond its TTL | Enforce TTL eviction; tag entries with `cached_at` timestamp; agent can force refresh via `recall(query, { freshen: true })` |
+| Memory limit hit | Tier 2 ring buffer exceeds configured capacity | LRU eviction of oldest entries; auto-summarization compresses oldest 50%; emit `memory.capacity_warning` metric |
+| Concurrent write conflicts | Two agents write to the same Long-Term Memory key simultaneously | Last-writer-wins with timestamp ordering; conflict logged with both agent IDs; shared memory uses SCE event ordering for consistency |
+| Promotion failure | `consolidate()` fails to promote Working Memory to Short-Term Memory | Retry with backoff; if persistent, preserve Working Memory content for the next turn and log error |
+| Encryption key unavailable | Tier 3 storage cannot decrypt due to missing or rotated key | Mark memory as `unavailable`; fail open to agent with degraded performance; alert operator for key recovery |
+
+## Security Considerations
+
+- **Memory isolation between projects:** Each project's memory store is backed by a separate encrypted SQLite database. Agents from project A cannot read or write memory entries belonging to project B.
+- **Encryption at rest:** Long-Term Memory (Tier 3) is encrypted with AES-256-GCM. The encryption key is derived from the workspace master key and stored in the OS keychain. Shared Memory events on the SCE are also encrypted when the topic is marked `encrypted: true`.
+- **Access control:** Memory operations are gated by the same ABAC policy engine used by the Kernel. `remember()` and `recall()` check the caller's identity against the memory entry's project and group scope before allowing access.
+- **Ephemeral tiers:** Working Memory (Tier 1) and Short-Term Memory (Tier 2) exist only in process memory and are never written to disk. They are zeroed on agent teardown.
+- **Audit:** All `remember()`, `forget()`, and `clear()` operations are logged to the Audit Log with caller identity, key pattern, and timestamp.
+
+See [Security Overview](./SECURITY.md) and [Encryption](./ENCRYPTION.md).
+
+## Observability
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `memory_tier_size_total` | Gauge | `tier` | Current entry count per tier |
+| `memory_tier_tokens_total` | Gauge | `tier` | Token consumption per tier |
+| `memory_recall_latency_seconds` | Histogram | `tier`, `hit` | Recall latency per tier, whether result was found |
+| `memory_consolidation_total` | Counter | `source_tier`, `target_tier` | Consolidation promotions between tiers |
+| `memory_eviction_total` | Counter | `tier`, `reason` | Evictions by tier and reason (ttl/lru/retention) |
+| `memory_summarization_total` | Counter | `tier` | Auto-summarization runs |
+| `memory_conflict_total` | Counter | `tier` | Concurrent write conflicts detected |
+| `memory_access_denied_total` | Counter | `operation` | ABAC-denied memory operations |
+
+Traces: one span per `recall()` and `consolidate()` call, with child spans for each tier accessed.
+
+## Acceptance Criteria
+
+- An agent stores a fact via `remember("deploy_key", "value", { importance: 0.9 })` and immediately recalls it from Working Memory in the same turn — recall time under 10 ms.
+- The same fact is recalled from Long-Term Memory in a new session after consolidation — recall returns the correct value with a similarity score above 0.9.
+- Filling Short-Term Memory beyond 70% capacity triggers auto-summarization within 5 seconds, producing a digest entry in Long-Term Memory.
+- An agent from project A attempting `memory.query` on project B's scope receives an ABAC denial — the operation returns an empty result set and increments `memory_access_denied_total`.
+- Concurrent `remember()` calls to the same Long-Term Memory key from two agents resolve via last-writer-wins with a logged conflict entry — no data corruption or crash occurs.
+
 ## Related Documents
 
 | Document | Description |

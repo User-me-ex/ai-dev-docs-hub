@@ -151,6 +151,99 @@ Current rule set version: `1.0.0`.
 
 ---
 
+## Rule Governance
+
+Rules are authored, reviewed, and approved through a structured governance process designed for both human and AI participation.
+
+### Proposal
+
+Any contributor (human or agent) may propose a new rule or rule change by:
+1. Creating an ADR in `templates/ADR.md` format describing the motivation, scope, and enforcement mechanism.
+2. Opening a PR that includes the ADR and a diff of this document.
+3. Adding the PR to the `rules-governance` label for tracking.
+
+### Review
+
+Proposals are reviewed by:
+- **Architecture Guardian maintainers** — verify enforceability and consistency with existing rules.
+- **At least one human maintainer** — approves or requests changes within 5 business days.
+- **Related subsystem owners** — if the rule affects a specific subsystem (e.g., Merge Manager), that subsystem's maintainer must sign off.
+
+### Approval
+
+A rule is approved when:
+1. Two maintainers (at least one human) approve the PR.
+2. The ADR is accepted and merged.
+3. The Guardian's built-in rule set is updated in the same release.
+
+Emergency rules (security-critical) may be fast-tracked with a single human maintainer approval and are reviewed retrospectively.
+
+## Rule Lifecycle
+
+Each rule passes through four lifecycle stages:
+
+| Stage | Description | Label |
+|-------|-------------|-------|
+| **Draft** | Proposed but not yet enforced. Used for gathering feedback. | `rule:draft` |
+| **Active** | Enforced by the Architecture Guardian at the severity specified in the rule. | `rule:active` |
+| **Deprecated** | Still enforced but scheduled for removal. A deprecation notice and migration path MUST be provided. | `rule:deprecated` |
+| **Retired** | No longer enforced. The rule text remains in this document for historical reference with a strikethrough and retirement date. | `rule:retired` |
+
+Transition rules:
+- Draft → Active requires governance approval (see above).
+- Active → Deprecated requires an ADR explaining why the rule is no longer needed.
+- Deprecated → Retired occurs automatically one release cycle after deprecation.
+- A rule MAY skip Draft and go directly to Active if it addresses an emergency security issue.
+
+## Rule Testing
+
+Every rule MUST have a corresponding test in the Architecture Guardian test suite:
+
+1. **Positive test**: A compliant change MUST pass the rule without violations.
+2. **Negative test**: A violating change MUST be caught by the rule with the correct severity and violation message.
+3. **Edge case test**: Boundary conditions (empty input, maximum input size, unusual encodings) MUST be tested.
+4. **Regression test**: Previously fixed false positives MUST remain fixed in subsequent releases.
+
+The test suite runs as part of the CI pipeline (`guardian-test` stage) and blocks merges if any rule test fails. Tests are written in a declarative format:
+
+```yaml
+# Example rule test
+rule: "P3 - No direct model provider calls"
+tests:
+  - name: "compliant: uses Kernel-proxied provider call"
+    input: "const result = await Kernel.callProvider('ollama', payload)"
+    expected: { violations: [] }
+  - name: "violation: direct axios call to provider"
+    input: "const res = await axios.post('https://api.openai.com/v1/chat', data)"
+    expected: { violations: [{ rule: "P3", severity: "critical" }] }
+```
+
+## Local-First Enforcement
+
+The following rules are specifically enforced to maintain the local-first architecture and prevent accidental cloud dependencies:
+
+### L1 — No direct model provider calls (P3 enforcement detail)
+
+All model provider I/O MUST go through the Kernel-proxied [Model Providers](./MODEL_PROVIDERS.md). An agent MUST NOT:
+- Call a provider API directly via `fetch`, `axios`, or any HTTP client.
+- Import a provider SDK (e.g., `openai`, `@anthropic-ai/sdk`) directly.
+- Construct a provider endpoint URL from configuration values.
+- Bypass the Nine Router for model routing decisions.
+
+The Nine Router is the sole entry point for all model inference, embedding, and audio requests. Any code that imports or calls a provider SDK directly is a P3 violation.
+
+### L2 — Local provider preference in fallback chains
+
+Fallback chains MUST list local providers (Ollama, local Llama.cpp, local embeddings) before cloud providers. The Nine Router enforces this at startup by validating the fallback chain ordering. A cloud-first fallback chain is rejected with a configuration error.
+
+### L3 — Offline-first capability
+
+Every feature that uses a cloud provider MUST have a local equivalent that provides functionally equivalent capability (possibly with different performance characteristics). Features without a local fallback MUST be clearly documented as "online-only" and MUST NOT be part of any critical path.
+
+### L4 — No hard-coded cloud endpoints
+
+Provider endpoints MUST be declared in the configuration file, not hard-coded in agent prompts, system prompts, or source code. The only exception is the default configuration shipped with the installer, which sets `providers.default = "ollama"` and points to `http://localhost:11434`.
+
 ## Related Documents
 
 - [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md) — enforces these rules

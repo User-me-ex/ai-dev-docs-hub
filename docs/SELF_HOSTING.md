@@ -165,6 +165,31 @@ await stop(server);
 | Chroma not running | Vector queries fail | Start Chroma or switch to LanceDB |
 | Memory pressure | Kernel OOM-killed | Reduce model context window or add swap |
 
+## Observability
+
+| Metric | Labels | Description |
+|--------|--------|-------------|
+| `self_hosting_uptime_seconds` | — | Gauge: time since last aidevos start |
+| `self_hosting_service_status` | `service` | Gauge: 1 if service is healthy, 0 if degraded/down |
+| `self_hosting_service_latency_ms` | `service` | Health check latency per service |
+| `self_hosting_memory_usage_bytes` | — | RSS memory of the Kernel process |
+| `self_hosting_disk_usage_bytes` | `path` | Disk usage of data directories |
+| `self_hosting_active_sessions` | — | Current number of active CLI/Kernel sessions |
+| `self_hosting_startup_duration_seconds` | — | Time from aidevos start to all services healthy |
+
+Events: `self_hosting.service_status_changed { service: "nine_router", from: "ok", to: "down" }` published on SCE.
+
+Health check endpoint (`GET /health`) provides machine-parseable JSON output for integration with local monitoring tools (Nagios, monit, systemd healthchecks, Datadog agent).
+
+Recommended local monitoring setup:
+```
+# systemd service healthcheck (every 30s)
+curl -sf http://localhost:3090/health || systemctl restart aidevos
+
+# Prometheus node_exporter + textfile collector
+aidevos status --format=prometheus > /var/lib/node_exporter/textfile/aidevos.prom
+```
+
 ## Security
 
 - All services bind to `127.0.0.1` by default — no network exposure

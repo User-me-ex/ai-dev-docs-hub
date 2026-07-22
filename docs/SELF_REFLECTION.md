@@ -187,6 +187,33 @@ Target metrics for v1.0: reflection_recall ≥ 0.85, reflection_precision ≥ 0.
 - An architectural issue in the output MUST trigger escalation, not refinement.
 - The confidence score MUST be reproducible: given the same output and model, two reflection calls produce the same confidence score within ±0.05.
 
+## Failure Modes
+
+| Mode | Detection | Response |
+|------|-----------|----------|
+| Reflection loop not converging | Same issues persist after `max_reflection_rounds` | Escalate to Kernel with full issue history; do not attempt further refinement |
+| Self-reflection false positive | Correct output flagged as having issues | Log false positive; deliver output anyway if Critic confidence is high; track in FP rate metric |
+| Self-reflection false negative | Buggy output passes self-reflection but is caught by Critic | Log miss; increment `reflection_false_negative` counter; retrain or adjust reflection prompt |
+| Confidence score unreliable | Provider returns no logprobs and self-consistency check fails | Fall back to reflection-only scoring (weight redistribution: 55% self-consistency, 45% reflection score) |
+| Reflection model unavailable | Nine Router returns no binding for reflection role | Skip reflection; emit `reflection.model_unavailable` warning; proceed to Critic directly |
+| Escalation ignored | Kernel does not respond to `worker.escalated` event within 30 s | Re-emit escalation every 30 s (max 3 times); if still ignored, persist to audit log and terminate worker |
+| Targeted reflection scope creep | Agent re-reflects entire output instead of Critic-flagged issues | Enforce scope by masking non-flagged sections in the reflection prompt; measure via `reflection_scope_adherence` metric |
+
+## Observability
+
+| Metric | Labels | Description |
+|--------|--------|-------------|
+| `reflection_round_total` | `trigger`, `result` | Reflection rounds by trigger (always, critic_rejected, low_confidence) and result (clean, issues_found, escalated) |
+| `reflection_rounds_per_output` | — | Histogram: number of reflection rounds per output before delivery |
+| `reflection_duration_seconds` | `trigger` | Wall-clock duration of reflection call |
+| `reflection_confidence` | `signal` | Confidence score components (logprob, self-consistency, reflection) |
+| `reflection_false_positive_total` | — | Outputs that were correctly produced but flagged by reflection |
+| `reflection_false_negative_total` | — | Buggy outputs that passed self-reflection but were rejected by Critic |
+| `reflection_escalation_total` | `reason` | Escalations by reason (reflection_limit, architectural, safety, low_confidence, missing_context) |
+| `reflection_scope_adherence` | — | Percentage of targeted reflections that did not modify non-flagged sections |
+
+Traces: one span per reflection call, with child spans for model invocation, issue extraction, and refinement generation.
+
 ## Open Questions
 
 - Whether to support a "reflection-only" agent role that other workers can delegate their reflection to, parallelising the quality check — tracked in [templates/ADR](../templates/ADR.md).

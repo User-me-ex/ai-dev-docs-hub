@@ -13,6 +13,31 @@ A provider adapter is responsible for:
 
 Provider adapters may also be contributed by third-party plugins (see [Plugin SDK](./PLUGIN_SDK.md)). All credential management happens within Nine Router's Secrets Management — the AI Dev OS Kernel never sees or handles provider API keys.
 
+## Architecture
+
+```mermaid
+flowchart LR
+    NR[Nine Router] --> PA[ProviderAdapter Interface]
+    PA --> O[Ollama Adapter]
+    PA --> OA[OpenAI Adapter]
+    PA --> A[Anthropic Adapter]
+    PA --> G[Google AI Adapter]
+    PA --> M[Mistral Adapter]
+    PA --> L[llama.cpp Adapter]
+    PA --> MLX[MLX Adapter]
+    PA --> MCP[MCP-exposed Adapter]
+    PA --> C[Custom Adapter]
+    O --> OLL[Ollama]
+    OA --> OAI[OpenAI]
+    A --> ANTH[Anthropic]
+    G --> GOOG[Google AI]
+    M --> MIST[Mistral]
+    L --> LLAMA[llama.cpp]
+    MLX --> MLX_L[MLX]
+    MCP --> MCP_S[MCP Servers]
+    C --> CUS[User-registered Providers]
+```
+
 ## Goals
 
 - One adapter per provider: no cross-provider logic leakage.
@@ -233,6 +258,16 @@ POST /v1beta/models/{model}:embedContent { content: { parts: [{ text }] } }
 - A 429 response with `Retry-After: 30` causes the adapter to pause requests to that provider for exactly 30 s.
 - Streaming a 2000-token response from any adapter returns all tokens in the correct order with no missing chunks.
 - Revoking an API key while a run is active causes the run to fall back to the next provider in the fallback chain, not to fail.
+
+## Security Considerations
+
+- Credentials for all provider adapters are managed exclusively through Nine Router Secrets Management; no provider API key ever enters the Kernel or agent context.
+- Each adapter operates in an isolated scope — a compromise in one adapter's credential handling cannot affect another adapter's configuration.
+- Credential values are never logged, traced, or exposed in error messages. Redacted placeholders (`OPENAI_API_KEY=***`) are used in all diagnostic output.
+- Authentication tokens are injected at the adapter level during request construction, not passed through from the caller, preventing accidental credential leakage via tool call parameters.
+- Adapter health state transitions that involve auth errors (`auth_error`, `quota_exceeded`) trigger immediate operator alerts via the SCE.
+
+See [Security Overview](./SECURITY.md) and [Secrets Management](./SECRETS_MANAGEMENT.md).
 
 ## Open Questions
 

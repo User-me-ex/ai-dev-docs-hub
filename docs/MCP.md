@@ -366,6 +366,117 @@ Health check procedure:
 - The health check probe correctly transitions a server from `active` to `degraded` after 3 failures.
 - Two MCP servers with the same name but different transports are both discoverable.
 
+## Examples
+
+### Example 1: Tool discovery and execution via Nine Router
+
+```typescript
+// An external agent discovers available tools from a local filesystem MCP server
+// All MCP calls are routed through Nine Router for model gateway, auth, and audit
+
+// Step 1: Connect to the MCP server
+const session = await mcp.connect({
+  name: "filesystem",
+  transport: "stdio",
+  command: "npx",
+  args: ["-y", "@modelcontextprotocol/server-filesystem", "/workspace"],
+});
+
+// Step 2: Discover tools (cached for 60 s, routed through Nine Router)
+const tools = await mcp.list_tools(session);
+// Returns: [{ name: "read_file", description: "Read file contents", inputSchema: {...} },
+//           { name: "write_file", description: "Write to a file", inputSchema: {...} },
+//           { name: "search_files", description: "Search for files by pattern", inputSchema: {...} }]
+
+// Step 3: Execute a tool call — Nine Router handles capability token issuance + audit
+const result = await mcp.call(session, "read_file", { path: "/workspace/README.md" });
+// Envelope logged to Audit Log:
+//   method: "tools/call"
+//   tool: "read_file"
+//   server: "filesystem"
+//   result_size: 2847 bytes
+//   token_jti: "mcp-01J4ABC..."
+//   duration_ms: 12
+
+// Step 4: If the tool call times out, Nine Router returns MCP_TIMEOUT
+// The agent retries idempotent read operations but does not retry writes
+```
+
+### Example 2: Error handling with remote MCP server
+
+```typescript
+const session = await mcp.connect({
+  name: "remote-github",
+  transport: "sse",
+  endpoint: "https://mcp.github.com/sse",
+});
+
+try {
+  // Nine Router issues a capability token scoped to "tools:call:list_issues"
+  const issues = await mcp.call(session, "list_issues", { repo: "my-org/my-repo" });
+  console.log(issues);
+} catch (err) {
+  if (err.code === "MCP_TIMEOUT") {
+    // Nine Router cancelled the call after the deadline (default 30 s)
+    // The agent retries with a fallback MCP server (e.g., local Git tool)
+  } else if (err.code === "MCP_AUTH_ERROR") {
+    // HTTP 401 from the remote server
+    // Nine Router triggers consent re-verification:
+    //   1. McpConsent record checked for validity
+    //   2. If consent revoked or expired, user must re-authorize
+    //   3. New capability token issued on re-authorization
+    // The agent pauses and waits for user intervention
+  } else if (err.code === "MCP_SERVER_ERROR") {
+    // HTTP 5xx — remote server is overloaded or down
+    // Nine Router circuit-breaks the server for 30 s
+    // The agent fails over to an alternative server if available
+  }
+}
+```
+
+### Example 3: AI Dev OS as MCP server — external IDE integration
+
+```typescript
+// A Cursor extension connects to AI Dev OS via MCP and reads agent memory
+// The extension uses AI Dev OS's built-in MCP server
+
+// Step 1: IDE discovers the AI Dev OS MCP endpoint
+// Transport: streamable-http at http://localhost:9080/mcp
+
+// Step 2: tools/list reveals AI Dev OS capabilities:
+//   - memory.query(q) — search agent memory
+//   - router.assign(role, model_id) — change model routing
+//   - research.search(q) — trigger research crawl
+//   - plan.submit(goal) — create a new plan
+
+// Step 3: IDE calls memory.query to retrieve recent agent context
+const response = await fetch("http://localhost:9080/mcp", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    jsonrpc: "2.0",
+    id: "ext-001",
+    method: "tools/call",
+    params: {
+      name: "memory.query",
+      arguments: { query: "recent code changes", limit: 10 },
+    },
+  }),
+});
+
+// Step 4: Nine Router checks:
+//   - Capability token: issued with scope "tools:call:memory.query"
+//   - Consent: granted during first connection setup
+//   - ABAC: caller identity has "read" permission on the target project
+
+// Step 5: Response returns memory entries with provenance and scores
+const { result } = await response.json();
+// [{ key: "deploy.config", value: "...", importance: 0.9, tier: "long_term" },
+//  { key: "api.changelog", value: "...", importance: 0.7, tier: "short_term" }]
+
+// All steps are audited and visible in the Audit Log for compliance review.
+```
+
 ## Related Documents
 
 - [Tool Calling](./TOOL_CALLING.md) · [Plugin SDK](./PLUGIN_SDK.md) · [Agent Communication](./AGENT_COMMUNICATION.md) · [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md) · [Persistent Memory](./PERSISTENT_MEMORY.md) · [Main AI Kernel](./MAIN_AI_KERNEL.md) · [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)

@@ -154,6 +154,65 @@ Use this table to navigate between related documents by concern:
 - Diagrams are stored in `../diagrams/` as standalone Mermaid files; subsystem docs may inline small diagrams.
 - Templates for new documents (ADR, RFC, PRD, subsystem spec) are in `../templates/`.
 
+## Reading Guide
+
+This index table helps you quickly find the right document based on what you need to do:
+
+| If you want to... | Start here | Then read |
+|-------------------|------------|-----------|
+| Understand the product vision | [Project Vision](./PROJECT_VISION.md) | [Product Overview](./PRODUCT_OVERVIEW.md), [PRD](./PRD.md) |
+| Set up a local instance | [Installation](./INSTALLATION.md) | [Getting Started](./GETTING_STARTED.md), [Local Dev](./LOCAL_DEV.md) |
+| Configure providers | [Model Providers](./MODEL_PROVIDERS.md) | [Nine Router](./NINE_ROUTER.md), [Local Models](./LOCAL_MODELS.md) |
+| Write agent prompts | [Master Prompt](./MASTER_PROMPT.md) | [Prompt Governance](./PROMPT_GOVERNANCE.md), [AI Groups](./AI_GROUPS.md) |
+| Debug a failed run | [Troubleshooting](./TROUBLESHOOTING.md) | [Logging](./LOGGING.md), [Observability](./OBSERVABILITY.md) |
+| Add a new subsystem spec | [templates/ADR](../templates/ADR.md) | [AI Coding Rules](./AI_CODING_RULES.md) |
+| Upgrade from an older version | [Upgrade Notes](./UPGRADE_NOTES.md) | [Migration Guide](./MIGRATION_GUIDE.md), [Changelog](./CHANGELOG.md) |
+| Understand the glossary | [Glossary](./GLOSSARY.md) | [FAQ](./FAQ.md) |
+| Contribute to the project | [Contributing](./CONTRIBUTING.md) | [Code of Conduct](./CODE_OF_CONDUCT.md), [Local Dev](./LOCAL_DEV.md) |
+
+## Related Documents
+
+### By Category
+
+**Core Architecture**
+- [System Overview](./SYSTEM_OVERVIEW.md) — high-level architecture diagram and component descriptions
+- [Main AI Kernel](./MAIN_AI_KERNEL.md) — the OS kernel and its primary control loop
+- [Nine Router](./NINE_ROUTER.md) — role assignment and provider routing engine
+- [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md) — inter-component communication and state hub
+- [Project Vision](./PROJECT_VISION.md) — long-term goals and guiding principles
+
+**Agent System**
+- [AI Groups](./AI_GROUPS.md) — agent group configuration
+- [AI Group System](./AI_GROUP_SYSTEM.md) — group management subsystem
+- [Dynamic Workers](./DYNAMIC_WORKERS.md) — worker process lifecycle
+- [Agent Lifecycle](./AGENT_LIFECYCLE.md) — agent state machine
+- [Agent Communication](./AGENT_COMMUNICATION.md) — inter-agent messaging protocol
+- [Multi-Agent Orchestration](./MULTI_AGENT_ORCHESTRATION.md) — coordination patterns for multiple agents
+- [Consensus](./CONSENSUS.md) — multi-agent agreement protocol
+- [Conflict Resolution](./CONFLICT_RESOLUTION.md) — resolving disagreements between agents
+- [Self Reflection](./SELF_REFLECTION.md) — agent self-evaluation and refinement
+
+**Quality and Testing**
+- [QA Plan](./QA_PLAN.md) — test levels, release gates, quality metrics
+- [Testing Strategy](./TESTING_STRATEGY.md) — detailed test approach
+- [Eval Harness](./EVAL_HARNESS.md) — automated evaluation framework
+- [Benchmarks](./BENCHMARKS.md) — performance benchmark methodology
+
+**Operations**
+- [Deployment](./DEPLOYMENT.md) — deployment topologies
+- [Self-Hosting](./SELF_HOSTING.md) — running AI Dev OS on your own hardware
+- [Offline Mode](./OFFLINE_MODE.md) — fully offline operation specification
+- [Disaster Recovery](./DISASTER_RECOVERY.md) — backup and restore procedures
+- [Docker](./DOCKER.md) — container build and deployment
+
+**Security and Compliance**
+- [Security Model](./SECURITY_MODEL.md) — overall security architecture
+- [Auth System](./AUTH_SYSTEM.md) — authentication mechanisms
+- [AuthZ/RBAC](./AUTHZ_RBAC.md) — authorization and role-based access control
+- [Secrets Management](./SECRETS_MANAGEMENT.md) — credential storage and rotation
+- [Privacy](./PRIVACY.md) — privacy policy and data handling
+- [Compliance](./COMPLIANCE.md) — regulatory compliance framework
+
 ## Conventions
 
 - Every subsystem doc follows the same section skeleton: **Overview → Goals → Non-Goals → Requirements → Architecture → Interfaces → Data Model → Failure Modes → Security → Observability → Acceptance Criteria → Open Questions → Related Documents**.

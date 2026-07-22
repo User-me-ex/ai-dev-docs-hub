@@ -161,6 +161,12 @@ conflict_log_path = "~/.aidevos/sync-conflicts/"
 | Checksum mismatch | Record on Node A != record on Node B | Log CRITICAL; overwrite with the record that has higher version; initiate incident |
 | Sync storm | > 1000 records changed in one interval | Throttle: batch into 100-record chunks; spread over `sync_interval_ms * 2` |
 | Vector index divergence | ANN results differ between nodes | Rebuild index from records on next reconciliation; log WARN |
+| Conflict resolution failure | LWW tiebreak produces no clear winner | Escalate to human; preserve both records in conflict log |
+| Replication lag exceeds threshold | Last sync timestamp older than 2× `sync_interval_ms` | Log WARN; trigger immediate reconciliation; page if lag > 30 s |
+| Network partition (extended) | No sync success for > 5 minutes | Enter degraded mode; queue all writes; alert operator on reconnection |
+| Sync message deserialization error | Invalid or corrupted payload on sync bus | Discard message; log ERROR with payload hash; request retransmit from origin |
+| Clock skew detected | Node clock differs from cluster average by > 1 s | Log WARN; use version counter as primary tiebreak (not timestamp) |
+| Write buffer overflow | Local buffer exceeds configured max (default 10k records) | Flush oldest 10% of buffer; increment overflow counter; log ERROR |
 
 ## Performance Budget
 
