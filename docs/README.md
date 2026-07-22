@@ -1,0 +1,56 @@
+# Readme
+
+> Entry point for the AI Dev OS documentation repository. Explains what this repo is, how to navigate it, and where to start reading.
+
+## Overview
+
+Entry point for the AI Dev OS documentation repository. Explains what this repo is, how to navigate it, and where to start reading.
+
+## Goals
+
+- Provide an authoritative specification for Readme.
+- Define contracts, invariants, and acceptance criteria.
+- Enable AI agents to reason about Readme without ambiguity.
+
+## Non-Goals
+
+- Implementation code — this repository is documentation-only.
+- Vendor-specific tuning beyond what is stated in Model Providers.
+
+## Requirements
+
+- MUST be consumable by both humans and AI agents.
+- MUST link to related documents in the `Related Documents` section.
+- MUST be updated whenever the contract it describes changes.
+
+## Architecture
+
+_(Detailed architecture, diagrams, and sequence flows to be authored. See `diagrams/` for Mermaid sources.)_
+
+## Interfaces
+
+_(APIs, CLI commands, events, or file formats exposed by this subsystem.)_
+
+## Data Model
+
+_(Entities, fields, invariants, and retention rules.)_
+
+## Failure Modes
+
+_(Known failure modes, detection strategy, and recovery.)_
+
+## Security Considerations
+
+_(Trust boundaries, threat model, mitigations.)_
+
+## Open Questions
+
+- _None recorded yet._
+
+## Related Documents
+
+- [Product Vision](./PROJECT_VISION.md)
+- [PRD](./PRD.md)
+- [TRD](./TRD.md)
+- [Main AI Kernel](./MAIN_AI_KERNEL.md)
+- [System Overview](./SYSTEM_OVERVIEW.md)
