@@ -162,6 +162,139 @@ Total time: **< 500ms** on modern hardware (SSD, 16 GB RAM).
 | Remote models | ❌ | Requires network. Falls back to local models. |
 | Cross-workspace bridge | ⚠️ | Works within same machine; network bridge requires network. |
 
+## Mermaid Localhost Topology
+
+```mermaid
+flowchart TB
+    subgraph User[Machine - localhost]
+        CLI[CLI] ---|IPC mTLS| HTTP[HTTP Server :12420]
+
+        subgraph Backend[Backend Process]
+            HTTP --> KERNEL[Kernel Loop]
+            KERNEL --> SCE[SCE Broker]
+            KERNEL --> GROUPS[AI Group System]
+            KERNEL --> GUARDIAN[Architecture Guardian]
+
+            GROUPS --> POOL[Agent Pool]
+            POOL --> W1[Worker 1]
+            POOL --> W2[Worker 2]
+            POOL --> WN[Worker N]
+
+            SCE --> MEM[Persistent Memory]
+            SCE --> GRAPH[Obsidian Graph]
+            SCE --> AUDIT[Audit Log]
+
+            MEM --> SQL[(SQLite)]
+            MEM --> VEC[(Vector Index)]
+            GRAPH --> KB[(Knowledge Bases)]
+        end
+
+        MODEL_LOCAL[Ollama] ---|HTTP| HTTP
+        CACHE[(~/.cache/aidevos)] --- Backend
+        CONFIG[(~/.aidevos/)] --- Backend
+    end
+
+    subgraph Remote[Optional]
+        MODEL_CLOUD[OpenAI / Anthropic / etc.] ---|HTTPS TLS 1.3| HTTP
+    end
+```
+
+## IPC Transport Details
+
+| Aspect | Unix Domain Socket (Linux/macOS) | Named Pipe (Windows) |
+|--------|--------------------------------|---------------------|
+| Path | `~/.aidevos/run/aidevos.sock` | `\\.\pipe\aidevos-<workspace_id>` |
+| Permissions | `0700` (owner only) | Pipe ACL (owner only) |
+| Auth | `SO_PEERCRED` (PID/UID) + mTLS | Named pipe impersonation + mTLS |
+| Buffer | 64 KB default | 64 KB default |
+| Max message | 1 MB | 1 MB |
+| Protocol | HTTP/2 over Unix socket | HTTP/2 over named pipe |
+
+All IPC messages are framed as HTTP/2 requests. The CLI sends requests to the backend; the backend responds with JSON bodies. Streaming responses (e.g., `runs stream`) use HTTP/2 server-sent events.
+
+## Process Model
+
+| Process Type | Count | Isolation | Restart Policy |
+|-------------|-------|-----------|----------------|
+| Backend (main) | 1 | OS process | Automatic (systemd/launchd) |
+| Worker agents | 0-N (configurable) | Child OS process | Per-worker: restart on crash (max 3) |
+| Plugin (WASM) | 0-N | WASM sandbox | Per-plugin: restart on crash (max 5) |
+| Plugin (subprocess) | 0-N | Child OS process | Per-plugin: restart on crash (max 3) |
+
+## Startup Sequence (Detailed)
+
+```
+T+0 ms    Load config from ~/.aidevos/config.toml (or fail with clear error)
+T+10 ms   Generate Ed25519 identity if first run; store in OS keychain
+T+20 ms   Bind HTTP server to localhost; scan ports from 12420 upward
+T+50 ms   Create IPC socket/pipe with 0700 permissions
+T+80 ms   Initialize Persistent Memory (SQLite + vector index)
+T+120 ms  Load workspace configuration
+T+150 ms  Start SCE broker (in-memory event bus)
+T+200 ms  Warm caches (embeddings, graph engine)
+T+250 ms  Write PID file to ~/.aidevos/run/aidevos.pid
+T+300 ms  Signal readiness; CLI can now connect
+```
+
+Total target: **< 500 ms** on modern hardware with SSD.
+
+## Security Boundaries
+
+```mermaid
+flowchart LR
+    subgraph Trusted[Trusted - Localhost]
+        KERNEL[Kernel Loop]
+        SCE[SCE Broker]
+        MEM[Persistent Memory]
+        AUDIT[Audit Log]
+    end
+
+    subgraph Sandboxed[Sandboxed - Worker Agents]
+        W1[Worker 1]
+        W2[Worker 2]
+        WN[Worker N]
+    end
+
+    subgraph External[External - TLS Only]
+        OA[OpenAI]
+        AN[Anthropic]
+        OL[Ollama Local]
+    end
+
+    KERNEL -->|Spawn with capability token| W1
+    KERNEL -->|Spawn with capability token| W2
+    KERNEL -->|Spawn with capability token| WN
+
+    W1 -->|Encrypted IPC| SCE
+    W1 -->|HTTPS| OA
+    W1 -->|HTTPS| AN
+    W1 -->|HTTP| OL
+
+    KERNEL --> AUDIT
+    W1 -.->|Every action logged| AUDIT
+```
+
+## Failure Modes
+
+| Mode | Detection | Response |
+|------|-----------|----------|
+| Port conflict | Bind fails on first 5 attempts | Log error; suggest manual port config |
+| IPC socket creation failure | Permission denied | Log error; check filesystem permissions |
+| Worker process crash | Heartbeat miss > 10s | Restart worker; reassign tasks |
+| Backend OOM | OS kills process | systemd/launchd auto-restart; analyze crash dump |
+| Disk full | Write failure on data directory | Enter read-only mode; alert operator |
+| Config load failure | Parse error on startup | Fall back to defaults; log error |
+| Keychain unavailable | Identity generation fails | Fall back to file-based key storage |
+
+## Acceptance Criteria
+
+- The backend process starts and binds to `localhost:12420` within 500 ms on modern hardware.
+- CLI connects to the backend via IPC and executes `aidevos models list` successfully.
+- A worker crash causes automatic restart and task reassignment within 10 seconds.
+- All IPC traffic is encrypted with mTLS; non-loopback connections are rejected.
+- Port conflicts are resolved by auto-incrementing (max 5 attempts).
+- The startup sequence produces no network egress when using local models.
+
 ## Related Documents
 
 | Document | Description |

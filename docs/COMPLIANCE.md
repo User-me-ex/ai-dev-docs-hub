@@ -136,6 +136,90 @@ audit_contact = "security@aidevos.dev"
 - The Audit Log supports a `compliance-check` tool that maps each SOC2 control to the corresponding audit entries for a given time range.
 - Telemetry data never contains code content, file names, or model inputs/outputs (verified by integration test).
 
+## Compliance Framework Diagram
+
+```mermaid
+flowchart TB
+    REG[Regulatory Requirements] --> FRAMEWORK{Compliance Framework}
+    FRAMEWORK --> SOC2[SOC 2]
+    FRAMEWORK --> GDPR[GDPR]
+    FRAMEWORK --> CCPA[CCPA]
+
+    SOC2 --> CONTROLS[Control Mapping]
+    CONTROLS --> CC1[CC1: Control Environment]
+    CONTROLS --> CC2[CC2: Communication]
+    CONTROLS --> CC3[CC3: Risk Assessment]
+    CONTROLS --> CC4[CC4: Monitoring]
+    CONTROLS --> CC5[CC5: Control Activities]
+    CONTROLS --> CC6[CC6: Logical Access]
+    CONTROLS --> CC7[CC7: System Operations]
+    CONTROLS --> CC8[CC8: Change Management]
+
+    GDPR --> RIGHTS[Data Subject Rights]
+    RIGHTS --> ACCESS[Right of Access]
+    RIGHTS --> ERASURE[Right to Erasure]
+    RIGHTS --> PORTABILITY[Data Portability]
+    RIGHTS --> OBJECT[Right to Object]
+
+    CCPA --> CPR[Consumer Privacy Rights]
+
+    CONTROLS --> EVIDENCE[Automated Evidence Collection]
+    RIGHTS --> EVIDENCE
+    CPR --> EVIDENCE
+
+    EVIDENCE --> AUDIT[Audit Log]
+    EVIDENCE --> METRICS[Prometheus Metrics]
+    EVIDENCE --> TRACES[OTel Traces]
+    EVIDENCE --> BACKUPS[Backup Verification]
+
+    AUDIT --> REPORT[Compliance Report]
+    METRICS --> REPORT
+    TRACES --> REPORT
+    BACKUPS --> REPORT
+```
+
+## Compliance Automation
+
+The compliance posture is continuously measured, not point-in-time:
+
+| Automation | Mechanism | Frequency |
+|------------|-----------|-----------|
+| Control mapping verification | Automated test checks each SOC2 control against evidence sources | Per commit |
+| Evidence gap analysis | Script scans evidence sources and reports missing coverage | Daily |
+| Retention policy enforcement | Cron job deletes expired records per `data_retention_days` | Hourly |
+| Telemetry schema audit | Validates telemetry events against allowed schema | Per event |
+| Access log review | Audit Log scanner checks for anomalous patterns | Continuous |
+| Backup encryption verification | Attempts decryption of latest backup with stored key | Daily |
+
+## Reporting Schedule
+
+| Report | Audience | Frequency | Contents |
+|--------|----------|-----------|----------|
+| Compliance dashboard | Engineering leads | Continuous (real-time) | Control status, evidence coverage, gaps |
+| Monthly compliance summary | Security team | Monthly | Control status changes, new evidence, incidents |
+| Quarterly audit package | Auditors | Quarterly | Full evidence export, DR test results, control mappings |
+| Annual SOC 2 report | External auditors | Annually | Complete SOC 2 Type II report package |
+
+## Failure Modes (Expanded)
+
+| Mode | Detection | Response |
+|------|-----------|----------|
+| Audit log integrity check fails | Checksum mismatch | Freeze system; page security team; initiate incident response |
+| Retention policy not enforced | Records exceed retention period | Log WARN; trigger manual cleanup; audit non-compliance window |
+| Evidence gap detected | Missing metric/event for required control | Log WARN; report in compliance dashboard; initiate remediation |
+| Control mapping drift | Code change removes evidence source | Block PR; require updated mapping |
+| Telemetry schema violation | Disallowed field in telemetry event | Drop event; alert operator; update schema |
+| Backup decryption failure | Decryption test fails | Rotate encryption key; re-encrypt backups; alert |
+
+## Acceptance Criteria (Expanded)
+
+- An auditor can reconstruct every SOC2 control mapping from the documentation and automated evidence sources without manual interviews.
+- Deleting `~/.aidevos/` and re-installing produces a fresh installation with zero telemetry data and zero audit events from the previous installation.
+- The Audit Log supports a `compliance-check` tool that maps each SOC2 control to the corresponding audit entries for a given time range.
+- Telemetry data never contains code content, file names, or model inputs/outputs (verified by integration test).
+- The automated evidence gap analysis runs daily and reports results to the compliance dashboard within 5 minutes.
+- A retention policy test verifies that records exceeding `data_retention_days` are deleted within 1 hour.
+
 ## Related Documents
 
 - [Privacy](./PRIVACY.md) — privacy policy

@@ -12,22 +12,41 @@ AI Dev OS is a local-first AI development operating system that orchestrates mul
 |-------------|---------|
 | **Operating System** | macOS 13+ (Apple Silicon & Intel), Windows 10/11 (WSL2), Linux (x86_64 & aarch64) |
 | **Terminal** | A modern terminal emulator (iTerm2, Windows Terminal, GNOME Terminal) |
-| **Ollama (recommended)** | Install [Ollama](https://ollama.com) for local model inference. Pull at least `llama3.2:3b` for a functional local setup. |
-| **Network** | Outbound HTTPS access for cloud provider API calls (optional if using only local models) |
+| **Ollama (required)** | Install [Ollama](https://ollama.com) for local model inference. Pull at least `llama3.2:3b` for a functional local setup. |
+| **Nine Router** | Install and run Nine Router (localhost:20128) — the model gateway. See [INSTALLATION.md](./INSTALLATION.md). |
+| **Network** | Outbound HTTPS access for optional cloud provider API calls (not needed with local models) |
 | **Disk** | ~150 MB for the binary; additional space for model storage (varies by provider) |
 
-## Quick Install
+## Step 1: Install Ollama
+
+```bash
+# macOS / Linux
+curl -fsSL https://ollama.com/install.sh | sh
+
+# Windows: download from https://ollama.com/download
+```
+
+Start Ollama and pull a starter model:
+
+```bash
+ollama pull llama3.2:3b
+```
+
+## Step 2: Install AI Dev OS
 
 Choose one of the following methods:
 
 ```bash
-# Option A — curl/sh (macOS & Linux)
+# Option A — npm (recommended)
+npm install -g aidevos
+
+# Option B — curl/sh (macOS & Linux)
 curl -fsSL https://aidevos.dev/install.sh | sh
 
-# Option B — Homebrew (macOS & Linux)
+# Option C — Homebrew (macOS & Linux)
 brew install aidevos/tap/aidevos
 
-# Option C — Direct binary download
+# Option D — Direct binary download
 # Download the latest release for your platform from:
 # https://github.com/aidevos/aidevos/releases/latest
 # Then move the binary to /usr/local/bin (macOS/Linux) or a PATH directory (Windows)
@@ -38,6 +57,10 @@ After install, verify the binary is on your PATH:
 ```bash
 aidevos --version
 ```
+
+## Step 3: Install and Start Nine Router
+
+Nine Router is the model gateway that AI Dev OS uses to route all model requests. See [INSTALLATION.md](./INSTALLATION.md) for setup instructions. Ensure it's running at `http://localhost:20128`.
 
 ## Initial Setup: `aidevos init`
 
@@ -51,9 +74,9 @@ The interactive wizard does the following:
 
 1. **Creates `~/.aidevos/`** — the home directory for config, data, keys, and plugins.
 2. **Generates `config.toml`** — with sensible defaults. You are prompted for:
-   - Default model provider (Ollama is the recommended starter).
+   - Nine Router endpoint (defaults to `http://localhost:20128`).
+   - Default model provider (Ollama is the default).
    - Ollama endpoint (defaults to `http://localhost:11434`).
-   - Optional cloud provider API keys.
 3. **Pulls default models** — if Ollama is detected, `aidevos init` can pull a recommended starter model.
 4. **Runs `aidevos doctor`** — a health check that validates your setup.
 
@@ -63,6 +86,7 @@ Example output:
 $ aidevos init
 ✔ Created ~/.aidevos
 ✔ Created ~/.aidevos/config.toml
+✔ Detected Nine Router at http://localhost:20128
 ✔ Detected Ollama at http://localhost:11434
 ? Pull default model (llama3.2:3b)? [Y/n] Y
 ✔ Pulled llama3.2:3b
@@ -120,28 +144,26 @@ mode = "server"
 host = "127.0.0.1"
 port = 8374
 
+[router]
+endpoint = "http://localhost:20128"
+
 [providers.ollama]
 endpoint = "http://localhost:11434"
 model = "llama3.2:3b"
 ```
 
-See [Configuration](./CONFIGURATION.md) for the full reference.
+All model requests go through Nine Router at `localhost:20128/v1`. See [Configuration](./CONFIGURATION.md) for the full reference.
 
-## Connecting Cloud Providers (Optional)
+## Optional: Add Cloud Providers
 
-AI Dev OS supports cloud providers alongside local models. Add API keys via `aidevos init --configure-providers` or by editing `config.toml`:
+Cloud providers are optional and configured inside Nine Router's dashboard (`http://localhost:20128`). AI Dev OS does not store cloud API keys directly — Nine Router handles provider authentication, fallback chains, and routing.
 
-```toml
-[providers.openai]
-api_key = "${OPENAI_API_KEY}"
-model = "gpt-4o"
+To add a cloud provider:
+1. Open Nine Router dashboard at `http://localhost:20128`
+2. Add your provider (OpenAI, Anthropic, etc.) and API key
+3. Configure routing rules to assign cloud models to specific roles
 
-[providers.anthropic]
-api_key = "${ANTHROPIC_API_KEY}"
-model = "claude-sonnet-4-20250514"
-```
-
-Environment variables are resolved at runtime. Supported providers are documented in [Model Providers](./MODEL_PROVIDERS.md).
+See [Nine Router documentation](./NINE_ROUTER.md) for details.
 
 ## Common Next Steps
 
@@ -175,6 +197,111 @@ Config files are watched for changes; some keys require a restart. Run `aidevos 
 ### "Connection refused" errors
 
 The backend process may not be running. Start it with `aidevos server start` in a separate terminal or use `aidevos run --mode=direct` to skip the server.
+
+## Quickstart Checklist
+
+Before your first run, complete these steps:
+
+- [ ] Install Ollama and pull a starter model: `ollama pull llama3.2:3b`
+- [ ] Install AI Dev OS (choose one method: npm, curl/sh, Homebrew, or binary download)
+- [ ] Verify installation: `aidevos --version`
+- [ ] Install and start Nine Router (see INSTALLATION.md)
+- [ ] Run `aidevos init` to scaffold config and detect Nine Router + Ollama
+- [ ] Ensure Ollama is running: `ollama serve` or check service status
+- [ ] Run `aidevos doctor` to validate setup
+- [ ] Submit your first goal: `aidevos run "hello world"`
+- [ ] Explore: `aidevos models list`, `aidevos router show`
+
+## First-Run Wizard Walkthrough
+
+When you run `aidevos init` for the first time, the interactive wizard guides you through:
+
+1. **Welcome screen** — Explains what AI Dev OS is and what the wizard will do.
+2. **Config directory** — Creates `~/.aidevos/` with default config.
+3. **Nine Router detection** — Verifies Nine Router is reachable at localhost:20128.
+4. **Provider setup** — Detects Ollama automatically. Cloud providers are configured separately in Nine Router.
+5. **Model pull** — Offers to pull a default model (llama3.2:3b) if Ollama is running.
+6. **Health check** — Runs `aidevos doctor` automatically.
+7. **Completion** — Shows summary of what was configured and suggests next commands.
+
+```
+$ aidevos init
+╭─ AI Dev OS Setup Wizard ─────────────────────────╮
+│                                                    │
+│  Welcome! Let's get you set up in a few steps.     │
+│                                                    │
+│  Step 1/5: Creating ~/.aidevos/  ✓                │
+│  Step 2/5: Detecting Nine Router...  ✓ (localhost:20128)│
+│  Step 3/5: Detecting Ollama...  ✓ (localhost:11434)│
+│  Step 4/5: Configuring providers  ✓               │
+│  Step 5/5: Running health check  ✓                │
+│                                                    │
+│  All done! Try: aidevos run "hello world"          │
+╰────────────────────────────────────────────────────╯
+```
+
+## Sample Project Creation
+
+Create your first AI Dev OS project:
+
+```bash
+# Create a project directory
+mkdir my-first-project
+cd my-first-project
+
+# Initialize project-specific config
+aidevos config set project.name "My First Project"
+
+# Create a custom agent for this project
+cat > .aidevos-agent.yaml << 'EOF'
+name: helper
+model: llama3.2:3b
+temperature: 0.7
+allowed_tools:
+  - fs.read_file
+  - fs.write_file
+  - code.search
+EOF
+
+# Register the agent
+aidevos agent register helper --file .aidevos-agent.yaml
+
+# Run a project-specific goal
+aidevos run "Create a hello world Python script"
+```
+
+## Common First Tasks
+
+| Task | Command |
+|------|---------|
+| Run your first goal | `aidevos run "hello world"` |
+| List available models | `aidevos models list` |
+| Check system health | `aidevos doctor --full` |
+| View run history | `aidevos runs list` |
+| Create a persistent memory entry | `aidevos memory write --kb main --key "project:hello" --value "My first project"` |
+| Search memory | `aidevos memory query "hello world"` |
+| View SCE topics | `aidevos context topics` |
+| Configure cloud providers | Use Nine Router dashboard at `http://localhost:20128` |
+
+## Learning Path Recommendations
+
+| Level | Focus | Resources |
+|-------|-------|-----------|
+| **Beginner** | Basic goals, CLI usage, model setup | GETTING_STARTED.md, CLI.md, FAQ.md |
+| **Intermediate** | Agent groups, Nine Router, memory | AI_GROUPS.md, NINE_ROUTER.md, PERSISTENT_MEMORY.md |
+| **Advanced** | Custom prompts, Guardian rules, plugins | PROMPT_GOVERNANCE.md, ARCHITECTURE_GUARDIAN.md, PLUGIN_SDK.md |
+| **Expert** | Multi-agent orchestration, deployment | MULTI_AGENT_ORCHESTRATION.md, DEPLOYMENT.md, MAIN_AI_KERNEL.md |
+
+## Next Steps Guide
+
+After completing the getting started guide:
+
+1. **Explore the CLI** — Run `aidevos --help` to see all commands
+2. **Configure your router** — `aidevos router assign builder llama3.2:3b`
+3. **Set up agent groups** — `aidevos groups create my-team --members builder reviewer tester`
+4. **Write custom prompts** — Create prompt files in `~/.aidevos/prompts/`
+5. **Connect an MCP server** — `aidevos mcp connect filesystem`
+6. **Deploy in server mode** — `aidevos server start --daemon`
 
 ## Related Documents
 

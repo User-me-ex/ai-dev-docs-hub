@@ -14,8 +14,9 @@ Just as operating systems abstract hardware and manage processes, AI Dev OS abst
 |--------|-------------|
 | **Autonomous multi-agent coordination** | Agents work in parallel, communicate through the SCE, and self-correct via the Critic and Guardian |
 | **Persistent organisational memory** | Knowledge survives across sessions through versioned, scoped knowledge bases |
-| **Local-first with cloud optional** | Everything runs locally by default; cloud models and storage are opt-in and pluggable |
-| **Model-agnostic** | No lock-in to any provider or model family. The Policy engine picks the best model per role |
+| **Local-first** | Everything runs locally by default on your machine. All data is local (SQLite, Chroma, filesystem). You own everything on your machine. |
+| **Nine Router as model gateway** | Nine Router (localhost:20128/v1) is the ONLY model gateway. No direct cloud provider calls. Local providers (Ollama, LM Studio, vLLM) are the default. Cloud providers are optional, configured inside Nine Router. |
+| **Model-agnostic** | No lock-in to any provider or model family. Nine Router picks the best model per role based on routing policy |
 | **Extensible platform** | Plugin SDK, MCP, custom providers, and custom Guardian rules enable third-party extensions |
 | **Spec-before-code** | Documentation is the source of truth. AI agents reason from normative docs, not code |
 | **Observability by default** | Every event is traced, every metric is collected, every decision is auditable |
@@ -46,7 +47,7 @@ Just as operating systems abstract hardware and manage processes, AI Dev OS abst
 | Average run success rate | > 80% | > 95% |
 | Time to first PR | < 5 min | < 30s |
 | Plugin ecosystem | 10 plugins | 500+ plugins |
-| Supported model providers | 6 (OpenAI, Anthropic, Google, Mistral, Ollama, llama.cpp) | 20+ |
+| Supported model providers (via Nine Router) | 6 (local + optional cloud) | 20+ |
 | Community contributors | 10 | 500+ |
 
 ## Competitive Landscape
@@ -76,7 +77,8 @@ Just as operating systems abstract hardware and manage processes, AI Dev OS abst
 The following requirements derive directly from the vision statement. Every subsystem MUST align with these principles.
 
 - **MUST** preserve local-first operation: no mandatory cloud dependency at any layer.
-- **MUST** support hot-swapping any model provider without changing subsystem code.
+- **MUST** route all model requests through Nine Router (localhost:20128/v1) — no direct provider API calls.
+- **MUST** support hot-swapping any model provider without changing subsystem code (handled by Nine Router).
 - **MUST** publish every state change to the SCE — no hidden state is acceptable.
 - **MUST** provide a complete observability story: metrics, traces, and logs from every subsystem.
 - **MUST** document every subsystem with the same normative style before implementation.
@@ -88,8 +90,9 @@ The following requirements derive directly from the vision statement. Every subs
 
 ### Year 1: Foundation
 - Complete the 8-stage Kernel loop with all 9 roles
+- Nine Router as the sole model gateway (localhost:20128/v1)
 - Local model support: Ollama, llama.cpp, MLX
-- Cloud model support: OpenAI, Anthropic, Google, Mistral
+- Cloud model support: optional, configured inside Nine Router
 - CLI with full command suite (`aidevos run`, `aidevos models`, `aidevos router`, `aidevos kb`)
 - Knowledge System with Main KB and Group KB
 - Shared Context Engine with event persistence
@@ -204,7 +207,8 @@ flowchart TB
   subgraph "AI Dev OS Vision"
     KERNEL[Main AI Kernel Loop] --> PLAN[Planning Engine]
     PLAN --> ROUTER[Nine Router]
-    ROUTER --> EXECUTE[Multi-Agent Orchestration]
+    ROUTER --> NINE_GW[Nine Router Gateway\nlocalhost:20128/v1]
+    NINE_GW --> EXECUTE[Multi-Agent Orchestration]
     EXECUTE --> CRITIC[Critic]
     CRITIC --> MERGE[Merge Manager]
     MERGE --> GUARD[Architecture Guardian]

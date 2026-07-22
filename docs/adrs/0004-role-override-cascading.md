@@ -23,7 +23,168 @@ Example: a workspace assigns `gpt-4o` to the Builder role. Project `web-app` ove
 4. There is no implicit inheritance. If group `frontend` has no explicit assignment for Builder, the Router falls through to project `web-app`'s assignment, then to workspace default.
 5. Scope is declared at assignment time: `router.assign("builder", "gpt-4o", scope="project", scope_id="web-app")`.
 
-### Why flat?
+### Scope Resolution Algorithm
+
+```
+Algorithm: ResolveEffectiveAssignment
+Input:
+  - role: string                  // e.g. "builder"
+  - group_path: string[]          // e.g. ["web-app", "frontend"]
+  - workspace_id: string
+Output: AssignedModel | null
+
+01  // Step 1: Try group-level (most specific)
+02  for depth = group_path.length - 1 down to 0:
+03      current_group = group_path[depth]
+04      assignment = lookupAssignment(role, "group", current_group)
+05      if assignment != null:
+06          log("Resolved: group={current_group}, role={role}, model={assignment.model}")
+07          return assignment.model
+08
+09  // Step 2: Try project-level
+10  if group_path.length > 0:
+11      project_id = group_path[0]  // Root group is the project
+12      assignment = lookupAssignment(role, "project", project_id)
+13      if assignment != null:
+14          log("Resolved: project={project_id}, role={role}, model={assignment.model}")
+15          return assignment.model
+16
+17  // Step 3: Try workspace-level default
+18  assignment = lookupAssignment(role, "workspace", workspace_id)
+19  if assignment != null:
+20      log("Resolved: workspace={workspace_id}, role={role}, model={assignment.model}")
+21      return assignment.model
+22
+23  // Step 4: No assignment found — return null (Router applies global default)
+24  log("No assignment found for role={role}, using global default")
+25  return null
+
+
+// Helper: lookupAssignment
+Algorithm: lookupAssignment(role, scope, scope_id)
+01  key = (role, scope, scope_id)
+02  if assignments.containsKey(key):
+03      return assignments[key]
+04  return null
+```
+
+**Complexity**: O(d) where d = group hierarchy depth. Typical d <= 3. With hash map lookup, each step is O(1). Overall: O(d) ≤ O(3) — constant time in practice.
+
+### Conflict Resolution Strategy
+
+Since assignments are flat (no cascading), conflicts only arise when the same `(role, scope, scope_id)` key is assigned multiple times:
+
+```
+Conflict: Two operators assign different models to the same (role, scope, scope_id)
+
+Resolution: Last-writer-wins with operator-level escalation
+
+Algorithm: WriteRoleAssignment
+
+01  existing = lookupAssignment(role, scope, scope_id)
+02  if existing != null:
+03      if existing.operator_rank >= new_assignment.operator_rank:
+04          // Same or higher rank: reject with explanation
+05          reject("Conflicting assignment for ({role}, {scope}, {scope_id}).
+06                  Existing: {existing.model} by {existing.operator}.
+07                  To override, an operator of rank > {existing.operator_rank} must confirm.")
+08          return
+09      else:
+10          // Higher rank operator: allow override, log conflict
+11          log("Assignment overridden: ({role}, {scope}, {scope_id}),
+12              was={existing.model}, now={new_assignment.model},
+13              by={new_assignment.operator}")
+14
+15  assignments[(role, scope, scope_id)] = new_assignment
+
+Operator ranks: admin (3) > maintainer (2) > operator (1)
+```
+
+### Override Precedence Examples
+
+| Scenario | Workspace Assignment | Project Assignment | Group Assignment | Effective Model |
+|----------|---------------------|-------------------|------------------|-----------------|
+| Group has explicit override | `gpt-4o` (Builder) | `claude-sonnet-4` (Builder) | `gpt-4o` (Builder, frontend) | `gpt-4o` |
+| Group has no override | `gpt-4o` (Builder) | `claude-sonnet-4` (Builder) | — (frontend) | `claude-sonnet-4` |
+| No project or group override | `gpt-4o` (Builder) | — | — (frontend) | `gpt-4o` |
+| No assignments at all | — | — | — | Global default (Router config) |
+| Two groups, both with overrides | `gpt-4o` (Builder) | `claude-sonnet-4` (Builder) | `gpt-4o` (frontend), `claude-opus-4` (backend) | frontend: `gpt-4o`, backend: `claude-opus-4` |
+| Group override for different role | `gpt-4o` (Builder) | — | `claude-sonnet-4` (Reviewer, frontend) | Builder: `gpt-4o`, Reviewer: `claude-sonnet-4` |
+
+### Group → Project → Workspace Fallback Examples
+
+```
+Example 1: Three-level hierarchy
+Groups:   "web-app/frontend"  →  "web-app"  →  "my-workspace"
+Builder:  [no assignment]     →  claude-4    →  gpt-4o
+Result:   claude-4 (inherited from project)
+
+Example 2: Two-level, workspace only
+Groups:   "web-app/frontend"  →  "web-app"     →  "my-workspace"
+Builder:  [no assignment]     →  [no assignment] →  gpt-4o
+Result:   gpt-4o (inherited from workspace)
+
+Example 3: All three levels have assignments
+Groups:   "web-app/frontend"  →  "web-app"     →  "my-workspace"
+Builder:  o1-mini             →  claude-4        →  gpt-4o
+Result:   o1-mini (group-level wins, no cascading)
+
+Example 4: Nested groups, no project override
+Groups:   "web-app/frontend/ui-kit"  →  "web-app/frontend"  →  "web-app"  →  "my-workspace"
+Builder:  [no assignment]            →  [no assignment]     →  [no assignment]  →  gpt-4o
+Result:   gpt-4o (walks up until a match is found: workspace level)
+```
+
+### Migration Guide from Previous Model
+
+If migrating from a cascading model (where group assignments propagated to child groups):
+
+```
+Step 1: Audit existing assignments
+  For each existing cascade-based assignment:
+    - List all groups that were implicitly inheriting the assignment
+    - These groups now need explicit assignments if they should keep the same model
+
+Step 2: Create explicit assignments
+  migration-tool --resolve-cascades
+  This tool:
+    - Reads all current assignments
+    - For each group that had an implicit (cascaded) assignment:
+      - Creates an explicit assignment at the group scope with the same model
+    - Logs all new assignments for operator review
+
+Step 3: Operator review
+  - Review the generated assignments
+  - Remove any that are no longer desired (groups that should fall through)
+  - Approve the migration batch
+
+Step 4: Enable flat resolution
+  - Toggle the resolution algorithm from "cascade" to "flat"
+  - All assignments now use explicit scope resolution
+  - Old cascade logic is removed
+
+Step 5: Verify
+  - Run `router verify --role builder --group web-app/frontend`
+  - Confirm the resolved model matches expectations
+  - Repeat for all roles and groups
+
+Rollback:
+  - Keep cascade logic for one release cycle
+  - Rollback by toggling back to "cascade" mode
+  - Old cascade-based assignments are still valid in cascade mode
+```
+
+### Migration Complexity
+
+| Metric | Value |
+|--------|-------|
+| Groups affected (typical workspace) | 10–50 |
+| Assignments to create (estimated) | 15–75 |
+| Migration tool execution time | < 5s |
+| Rollback window | 1 release cycle |
+| Operator review time | 15–30 minutes |
+
+## Why flat?
 
 - Simpler to reason about: "my group uses the model I assigned to my group" — no mental model of cascading.
 - Simpler to implement: a single lookup against three keys, no tree traversal.

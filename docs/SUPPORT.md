@@ -123,6 +123,112 @@ Available support tiers:
   priority feature requests, custom integrations, on-premises
   deployment support.
 
+## Support Flow
+
+```mermaid
+flowchart TB
+    USER[User needs help] --> SEARCH{Checked docs?}
+    SEARCH -->|No| DOCS[Read docs.ai-dev-os.org]
+    DOCS --> SOLVED{Problem solved?}
+    SOLVED -->|Yes| DONE[Done]
+    SOLVED -->|No| DISCORD{Need live help?}
+
+    SEARCH -->|Yes| DISCORD
+
+    DISCORD -->|Community tier| DISCORD_CHANNEL[Post in #help]
+    DISCORD_CHANNEL --> RESPONSE{Response within SLA?}
+    RESPONSE -->|Yes| DONE
+    RESPONSE -->|No| GITHUB[Open GitHub issue]
+
+    DISCORD -->|Standard/Enterprise| TICKET[Open support ticket\nvia email/portal]
+    TICKET --> TIER{Support tier?}
+
+    TIER -->|Standard| S1[48h response SLA\nEmail support\nQuarterly reviews]
+    TIER -->|Enterprise| E1[4h response SLA\nDedicated engineer\nCustom integrations]
+
+    S1 --> RESOLVED[Resolution proposed]
+    E1 --> RESOLVED
+    RESOLVED --> VERIFY[User verifies fix]
+    VERIFY --> CLOSE[Ticket closed]
+```
+
+## Support Ticket Lifecycle
+
+```
+1. TICKET CREATED — User submits via email (support@ai-dev-os.org) or portal
+2. TRIAGE — Support team categorizes (bug / feature / config / question) and assigns priority
+3. INVESTIGATION — Engineer assigned; reproduces issue; identifies root cause
+4. RESOLUTION — Fix provided as patch, config change, or documentation update
+5. VERIFICATION — User confirms the fix works in their environment
+6. CLOSURE — Ticket closed; resolution recorded in knowledge base
+7. FOLLOW-UP — For Standard/Enterprise: post-resolution review within 5 business days
+```
+
+### Priority Matrix
+
+| Priority | Definition | Examples | Target Response |
+|----------|-----------|----------|-----------------|
+| **P0 — Critical** | System down, data loss, security breach | Kernel crash loop, SCE data corruption | 1 hour (Enterprise) / 4 hours (Standard) |
+| **P1 — High** | Major feature broken, no workaround | Router fails on all providers, memory persistence lost | 4 hours (Enterprise) / 24 hours (Standard) |
+| **P2 — Medium** | Feature broken, workaround exists | One provider adapter fails, CLI flag ignored | 24 hours (Enterprise) / 48 hours (Standard) |
+| **P3 — Low** | Minor issue, cosmetic, documentation | Typo in docs, UI alignment off | Next release (Enterprise) / Best effort (Standard) |
+
+## Escalation Matrix
+
+| Level | Role | Authority | Trigger |
+|-------|------|-----------|---------|
+| **L1** | Support Engineer | Triage, known issues, config fixes | Ticket created |
+| **L2** | Senior Engineer | Code-level debugging, workarounds | L1 cannot resolve in SLA time |
+| **L3** | Core Maintainer | Architecture changes, design decisions | L2 identifies a fundamental system issue |
+| **L4** | Human Operator (Enterprise) | Escalation for procedural conflicts | Only for on-premises deployments |
+
+## SLI / SLO Definitions
+
+| SLI | Definition | SLO Target | Measurement |
+|-----|-----------|------------|-------------|
+| **Ticket acknowledgment** | Time from ticket creation to first human response | ≤ 30 min (Enterprise) / ≤ 2h (Standard) | 90th percentile |
+| **Ticket resolution (P0)** | Time to deploy a fix for critical issues | ≤ 4h (Enterprise) / ≤ 12h (Standard) | 95th percentile |
+| **Ticket resolution (P1)** | Time to deploy a fix for high-priority issues | ≤ 24h (Enterprise) / ≤ 72h (Standard) | 90th percentile |
+| **Ticket resolution (P2)** | Time to deploy a fix for medium-priority issues | ≤ 5 business days (Enterprise) / ≤ 10 business days (Standard) | 90th percentile |
+| **Community response** | Time to first response on Discord #help | ≤ 4h during business hours | Best effort, no SLO |
+| **Security disclosure acknowledgment** | Time to acknowledge a security report | ≤ 48h | 100th percentile |
+
+## Support Hours
+
+| Tier | Hours | Coverage |
+|------|-------|----------|
+| **Community** | Best effort, no guaranteed hours | Discord + GitHub Issues |
+| **Standard** | 09:00–18:00 UTC, Mon–Fri | Email support, 48h max response |
+| **Enterprise** | 24/7/365 | Dedicated engineer on-call rotation, 4h max response for P0 |
+
+## Failure Modes
+
+| Mode | Detection | Response |
+|------|-----------|----------|
+| Ticket queue overflow | > 50 open tickets | Auto-respond with FAQ links; recruit additional L1 engineers |
+| SLA breach | Missed response time for P0 ticket | Page on-call engineering manager; escalate to L3 directly |
+| Discord channel spam | > 100 messages/hour in #help | Enable slow mode; deploy moderation bot |
+| Knowledge base stale | Support answer contradicted by current docs | Flag doc for update; notify documentation team |
+| Email delivery failure | Bounce notification from support inbox | Switch to portal-based ticketing; notify user via Discord DM |
+
+## Observability
+
+| Metric | Labels | Description |
+|--------|--------|-------------|
+| `support_tickets_total` | `priority`, `tier` | Tickets created by priority and support tier |
+| `support_resolution_seconds` | `priority` | Time to resolution by priority |
+| `support_sla_breach_total` | `priority` | SLA breaches by priority level |
+| `support_first_response_seconds` | `tier` | Time to first human response |
+| `support_csat_score` | — | Customer satisfaction score (1-5) from post-closure survey |
+
+## Acceptance Criteria
+
+- Submitting a ticket via email generates an auto-acknowledgment within 5 minutes.
+- A P0 ticket from an Enterprise customer pages the on-call engineer within 1 hour.
+- Community-tier users posting in Discord #help receive a response from a maintainer or community member within 4 hours during business hours.
+- The support knowledge base is searchable from the portal and returns relevant previous resolutions for similar ticket topics.
+- Post-resolution, a CSAT survey is sent automatically and results are aggregated in the support dashboard.
+
 ## Related Documents
 
 - [FAQ](FAQ.md) — frequently asked questions

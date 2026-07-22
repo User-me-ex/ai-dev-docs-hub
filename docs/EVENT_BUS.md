@@ -168,6 +168,121 @@ Traces: each `bus.publish` creates a trace span; each subscriber delivery is a c
 - When the async queue limit is reached, `bus.publish` returns `BUS_BACKPRESSURE` for normal priority events.
 - `bus.once("run.completed", 1000)` resolves within 1 ms of a matching event being published, or rejects after 1 second.
 
+## Topic Naming Convention
+
+Events follow a hierarchical naming convention with dot-separated segments:
+
+```
+<domain>.<entity>.<action>
+```
+
+| Pattern | Example | Description |
+|---------|---------|-------------|
+| `run.*` | `run.completed`, `run.failed` | Run lifecycle events |
+| `guardian.*` | `guardian.veto`, `guardian.passed` | Guardian verdicts |
+| `group.*` | `group.created`, `group.circuit_open` | Group events |
+| `memory.*` | `memory.written`, `memory.deleted` | Memory operations |
+| `provider.*` | `provider.degraded`, `provider.restored` | Provider status |
+| `safety.*` | `safety.refusal`, `safety.violation` | Safety events |
+| `flag.*` | `flag.enabled`, `flag.disabled` | Feature flags |
+| `plugin.*` | `plugin.loaded`, `plugin.crashed` | Plugin lifecycle |
+
+Glob patterns (`run.*`, `guardian.*`) match all events in that domain.
+
+## Subscriber Lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> Registering: bus.subscribe(pattern)
+    Registering --> Active: handle returned
+    Active --> Receiving: event matches pattern
+    Receiving --> Active: processed
+    Active --> Unsubscribing: bus.unsubscribe(handle)
+    Unsubscribing --> [*]: removed
+    Active --> Panic: subscriber error
+    Panic --> Removed: caught & logged
+    Removed --> [*]
+```
+
+## Event Filtering
+
+Subscribers can filter events at dispatch time:
+
+```
+bus.subscribe("run.*", {
+  filter: {
+    sources: ["kernel", "guardian"],     // only from these subsystems
+    min_priority: "high"                 // only high-priority events
+  }
+})
+```
+
+Filtering uses prefix matching for types (`run.*` matches `run.completed`) and exact matching for sources. Priority filtering discards events below the threshold before dispatch.
+
+## Dead Letter Queue (Event Bus)
+
+Events that cannot be delivered due to subscriber panics or TTL expiry are moved to an in-memory dead letter buffer:
+
+```
+DeadLetterEntry {
+  event:     EventEnvelope
+  reason:    "subscriber_panic" | "ttl_expired" | "queue_overflow"
+  timestamp: i64
+  attempts:  u32
+}
+```
+
+The dead letter buffer has a maximum size of 1000 entries. When full, the oldest entry is dropped. Dead letter entries are also flushed to SCE for persistent storage.
+
+## Replay Capability
+
+The Event Bus itself does not persist events, but events flushed to SCE can be replayed:
+
+```
+bus.replayFromSCE(topic, fromOffset):
+    events = sce.query(topic, { from: fromOffset })
+    for each event in events:
+        bus.publish(event)   // re-publish locally
+```
+
+This replays SCE-persisted events back through the in-process bus, enabling catch-up for late-joining subscribers.
+
+## Failure Modes (Expanded)
+
+| Mode | Detection | Response |
+|------|-----------|----------|
+| Async queue full | Channel send timeout | Return `BUS_BACKPRESSURE` to publisher; increment `bus_dropped_total` |
+| SCE unreachable | SCE write timeout | Buffer up to 10k events; after overflow drop oldest; increment `bus_sce_backpressure_total` |
+| Subscriber panic | Panic recovery | Catch, log, remove subscriber; increment `bus_subscriber_panics_total` |
+| Subscription leak | Handle count > threshold | Warn at `bus_active_subscribers > 1000`; Kernel MAY force-unsubscribe agent-scoped handles on agent exit |
+| Stale event (TTL exceeded) | Compare `ttl_ms` at dispatch | Drop silently; increment `bus_ttl_dropped_total` |
+| Slow sync subscriber | Blocking call > 1 ms | Log warning; subscriber MAY be removed if consistently slow |
+| Event type mismatch | Glob pattern no match | Silently skip; no error |
+
+## Observability / Metrics (Expanded)
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `bus_published_total` | Counter | type | Events published by type |
+| `bus_delivered_total` | Counter | type, mode (sync/async) | Events delivered to subscribers |
+| `bus_dropped_total` | Counter | reason (backpressure, ttl, overflow) | Events dropped |
+| `bus_subscriber_panics_total` | Counter | — | Subscriber panics caught |
+| `bus_active_subscribers` | Gauge | pattern | Current subscriber count |
+| `bus_async_queue_depth` | Gauge | priority | Events waiting in async queues |
+| `bus_sce_flush_seconds` | Histogram | — | Time to flush to SCE |
+| `bus_sce_buffer_count` | Gauge | — | Events in the flush buffer |
+| `bus_dead_letter_count` | Gauge | — | Events in dead letter buffer |
+
+## Acceptance Criteria (Expanded)
+
+- A sync subscriber blocks the publisher until the subscriber returns.
+- An async subscriber processes events on a separate goroutine/task and does not block the publisher.
+- After `bus.flush()` resolves, all prior events are readable from SCE.
+- When the async queue limit is reached, `bus.publish` returns `BUS_BACKPRESSURE` for normal priority events.
+- `bus.once("run.completed", 1000)` resolves within 1 ms of a matching event being published, or rejects after 1 second.
+- A subscriber using pattern `run.*` receives `run.completed`, `run.failed`, and `run.started` but not `guardian.veto`.
+- SCE replay via `bus.replayFromSCE()` delivers all events in order to a late-joining subscriber.
+
 ## Related Documents
 
 - [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md)

@@ -71,16 +71,17 @@ flowchart TB
   AGENT[External Agent] -- MCP --> MCP_SVC
 ```
 
-## Technology Stack
+##Technology Stack
 
 | Component | Default | Optional alternatives |
 |-----------|---------|----------------------|
 | HTTP framework | Hono (TS) / Axum (Rust) | Express, Fastify |
 | Database | SQLite (via `better-sqlite3` / `rusqlite`) | PostgreSQL |
-| Vector index | `usearch` (embedded) | `pgvector`, Qdrant |
+| Vector index | `usearch` / Chroma (embedded) | `pgvector`, Qdrant |
 | Object store | Local filesystem (`~/.aidevos/objects/`) | S3-compatible |
 | SCE backend | SQLite WAL-mode | NATS/JetStream, Kafka |
 | Queue | In-memory with SQLite persistence | Redis, NATS |
+| Model gateway | Nine Router (localhost:20128) | None (Nine Router is required) |
 | Auth | JWT + OS keychain | OAuth2, OIDC |
 | Metrics | Prometheus (`/metrics`) | OpenTelemetry push |
 | Traces | OTLP (stdout JSON by default) | Jaeger, Tempo |
@@ -225,8 +226,11 @@ synchronous = "NORMAL"           # NORMAL | FULL
 backend     = "sqlite"           # sqlite | nats
 nats_url    = ""                 # required when backend = "nats"
 
+[router]
+endpoint    = "http://localhost:20128"  # Nine Router — model gateway
+
 [vector]
-backend     = "usearch"          # usearch | pgvector
+backend     = "usearch"          # usearch | chroma | pgvector
 dimensions  = 768                # must match embedding model output
 m           = 16                 # usearch HNSW M parameter
 
@@ -239,7 +243,7 @@ backend     = "local"            # local | s3
 path        = "~/.aidevos/objects/"
 
 [models]
-discovery_ttl_minutes = 10
+discovery_ttl_minutes = 10      # models discovered via Nine Router
 
 [auth]
 mode        = "local"            # local | jwt | oidc
@@ -252,14 +256,16 @@ jwt_secret  = ""                 # only for jwt mode; prefer secrets
 1. Parse and validate config
 2. Open SQLite (create schema if first run)
 3. Run pending migrations (see DATABASE.md)
-4. Start SCE broker (SQLite or NATS)
-5. Start Persistent Memory service (relational + vector)
-6. Load plugin manifests from ~/.aidevos/plugins/
-7. Start Job Scheduler (load scheduled jobs from DB)
-8. Start HTTP + WebSocket server
-9. Start MCP server
-10. Emit server.started event on SCE
-11. Signal readiness (READY on stdout for process supervisors)
+4. Verify Nine Router connectivity at configured endpoint (localhost:20128)
+5. Start SCE broker (SQLite or NATS)
+6. Start Persistent Memory service (relational + vector)
+7. Load plugin manifests from ~/.aidevos/plugins/
+8. Start Job Scheduler (load scheduled jobs from DB)
+9. Discover models from Nine Router
+10. Start HTTP + WebSocket server
+11. Start MCP server
+12. Emit server.started event on SCE
+13. Signal readiness (READY on stdout for process supervisors)
 ```
 
 ## Graceful Shutdown

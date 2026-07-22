@@ -151,6 +151,113 @@ Long-term support releases occur every 6 months (approximately January and July)
 
 The migration path between LTS releases is documented in [Migration Guide](./MIGRATION_GUIDE.md). A minimum of one minor release of overlap is maintained — LTS `N` and LTS `N+1` are both supported for at least one month.
 
+## Release Pipeline Diagram
+
+```mermaid
+flowchart LR
+    DEV[Development] --> FREEZE[Feature Freeze T-7]
+    FREEZE --> BRANCH[Cut release/vX.Y branch]
+    BRANCH --> RC[Build RC]
+    RC --> TEST{RC Testing}
+    TEST -->|Eval >= 90%| SIGN[Sign artifacts]
+    TEST -->|Eval < 90%| FIX[Bug fixes]
+    FIX --> RC2[Build RC.2]
+    RC2 --> TEST
+    SIGN --> PUBLISH[Publish Release]
+    PUBLISH --> TAG[Tag vX.Y.Z]
+    PUBLISH --> NOTES[Release Notes]
+    PUBLISH --> BREW[Homebrew]
+    PUBLISH --> DOCKER[Docker Image]
+    PUBLISH --> NPM[npm Package]
+    TAG --> MERGE[Back-merge to main]
+
+    HOTFIX[Hotfix] --> HB[hotfix/* branch from tag]
+    HB --> FIX2[Apply fix]
+    FIX2 --> RC_HOT[Build hotfix RC]
+    RC_HOT --> PUBLISH
+```
+
+## Version Number Calculation
+
+```
+function calculateVersion(type):
+    current = readCurrentVersion()
+    if type == "major":
+        return { major: current.major + 1, minor: 0, patch: 0 }
+    if type == "minor":
+        return { major: current.major, minor: current.minor + 1, patch: 0 }
+    if type == "patch":
+        return { major: current.major, minor: current.minor, patch: current.patch + 1 }
+    if type == "pre-release":
+        rcNum = getNextRcNumber(current)
+        return { ...current, pre: "rc." + rcNum }
+```
+
+The version is read from the authoritative source (e.g., `Cargo.toml` for Rust, `package.json` for Node.js). The release pipeline bumps it automatically using `bump2version` or equivalent tool.
+
+## Release Checklist (Detailed)
+
+| # | Item | Owner | Verification |
+|---|------|-------|-------------|
+| 1 | All milestone ACs pass in CI | QA | CI status == green |
+| 2 | Eval Harness >= 90% | ML Team | Eval report |
+| 3 | CHANGELOG updated | Release Engineer | Review CHANGELOG diff |
+| 4 | Platform version bumped | Release Engineer | Version file diff |
+| 5 | MASTER_PROMPT version bumped (if changed) | Kernel Team | Prompt diff |
+| 6 | Docs version bumped (if changed) | Docs Team | docs/README.md diff |
+| 7 | Migration guide updated | Docs Team | MIGRATION_GUIDE.md diff |
+| 8 | Binaries built and signed | CI | Artifact presence + signature verify |
+| 9 | Container image built and pushed | CI | Image digest |
+| 10 | Release notes drafted | PM | Notes reviewed |
+| 11 | Changelog posted | Release Engineer | GitHub Release page |
+| 12 | Announcement drafted | PM | Internal comms |
+
+## Artifact Signing
+
+| Artifact | Signing Method | Key |
+|----------|----------------|-----|
+| Binary (macOS) | Apple notarization + `codesign` | Apple Developer ID |
+| Binary (Windows) | Authenticode (`signtool`) | EV Code Signing cert |
+| Binary (Linux) | GPG detached signature | Release GPG key (4096-bit RSA) |
+| Container image | Cosign keyless signing | OIDC (GitHub ID token) |
+| npm package | npm provenance | GitHub OIDC |
+
+Signatures are verified by the installation script (`install.sh`) before extraction.
+
+## Release Notes Generation
+
+Release notes are auto-generated from the CHANGELOG entry plus GitHub milestone data:
+
+```
+1. Read CHANGELOG entry for the new version.
+2. Query GitHub milestone: closed issues and PRs.
+3. Categorize: Added / Changed / Deprecated / Removed / Fixed / Security.
+4. Include upgrade instructions from MIGRATION_GUIDE.md.
+5. Include Eval Harness score.
+6. Include binary checksums.
+7. Post to GitHub Releases page.
+```
+
+## Failure Modes
+
+| Mode | Detection | Response |
+|------|-----------|----------|
+| Build failure on one target | CI job fails | Investigate; fix; rebuild RC |
+| Eval score below threshold | Eval report < 90% | Fix regressions; rebuild RC |
+| Signature verification fails | CI signature check fails | Revise signing step; re-sign |
+| Docker push fails | Registry auth failure | Check credentials; retry |
+| Homebrew formula conflict | PR review fails | Update formula; re-submit |
+| Release notes missing entries | Manual review | Add missing items; re-draft |
+| Hotfix merge conflict | Git merge fails | Manual conflict resolution |
+
+## Acceptance Criteria
+
+- Running the release pipeline produces signed binaries for all 5 target platforms within 30 minutes.
+- The Eval Harness runs automatically against each RC and blocks promotion if score < 90%.
+- A hotfix branch cut from the latest release tag produces a patch release without running feature freeze.
+- The Homebrew formula is updated and published within 10 minutes of the release tag.
+- Release notes accurately reflect all changes in the CHANGELOG and GitHub milestone.
+
 ## Related Documents
 
 - [Versioning](./VERSIONING.md)

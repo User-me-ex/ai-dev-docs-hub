@@ -1,12 +1,12 @@
 # Docker
 
-> Containerised deployment of AI Dev OS — Docker image, Docker Compose for local evaluation, and multi-service deployment for production. This document is normative — implementations MUST satisfy every MUST clause below.
+> Containerised deployment of AI Dev OS — Docker image, Docker Compose, and multi-service deployment. This document is normative — implementations MUST satisfy every MUST clause below.
 
 ## Overview
 
-Docker is the primary distribution and deployment mechanism for AI Dev OS beyond the self-contained binary. The Docker image packages the backend server (Kernel, SCE, Memory, API), CLI, and all default configuration into a single container that can run anywhere Docker is installed.
+Docker is one deployment option for AI Dev OS, best suited for containerized environments, CI/CD, and production server deployment. For local development, the [npm install](./INSTALLATION.md) is recommended as it's simpler and requires fewer resources.
 
-Docker Compose is used for local development and evaluation, providing the backend server plus optional companion services (Postgres, Redis, Prometheus, Grafana).
+The Docker image packages the backend server (Kernel, SCE, Memory, API), CLI, and all default configuration into a single container. Docker Compose provides the backend server plus optional companion services (Nine Router, Ollama, Prometheus, Grafana).
 
 ## Goals
 
@@ -99,6 +99,27 @@ CMD ["server", "start"]
 version: "3.8"
 
 services:
+  # Required: Nine Router (model gateway)
+  nine-router:
+    image: ghcr.io/nine-router/nine-router:latest
+    container_name: nine-router
+    ports:
+      - "20128:20128"
+    volumes:
+      - nine_router_data:/data
+    restart: unless-stopped
+
+  # Required: Ollama (local model inference)
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+
+  # AI Dev OS backend
   aidevos:
     image: ghcr.io/aidevos/aidevos:latest
     container_name: aidevos
@@ -111,26 +132,16 @@ services:
     environment:
       - AIDEVOS_HOME=/data
       - AIDEVOS_LOG_LEVEL=info
+      - AIDEVOS_ROUTER_ENDPOINT=http://nine-router:20128
+    depends_on:
+      - nine-router
+      - ollama
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "/app/aidevos", "doctor"]
       interval: 30s
       timeout: 10s
       retries: 3
-
-  # Optional: Postgres backend (replaces SQLite)
-  postgres:
-    image: postgres:16-alpine
-    container_name: aidevos-postgres
-    environment:
-      POSTGRES_DB: aidevos
-      POSTGRES_USER: aidevos
-      POSTGRES_PASSWORD: ${AIDEVOS_DB_PASSWORD:-changeme}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    profiles:
-      - postgres
-      - full
 
   # Optional: Prometheus for metric scraping
   prometheus:
@@ -159,8 +170,9 @@ services:
       - full
 
 volumes:
+  nine_router_data:
+  ollama_data:
   aidevos_data:
-  postgres_data:
   prometheus_data:
   grafana_data:
 ```
@@ -168,17 +180,18 @@ volumes:
 ### Usage
 
 ```bash
-# Start basic backend
+# Start basic stack (Nine Router + Ollama + AI Dev OS)
 docker compose up -d
 
 # Start full stack (with monitoring)
 docker compose --profile full up -d
 
-# Run a one-off command
+# Run a one-off command (ensure Nine Router is accessible)
 docker run --rm ghcr.io/aidevos/aidevos:latest doctor
 
 # Run with local config
 docker run --rm -v ~/.aidevos:/home/aidevos/.aidevos:ro \
+  -e AIDEVOS_ROUTER_ENDPOINT=http://host.docker.internal:20128 \
   ghcr.io/aidevos/aidevos:latest run "hello world"
 ```
 
@@ -223,10 +236,10 @@ The Docker image reads configuration from:
 
 - `docker pull ghcr.io/aidevos/aidevos:latest` completes in under 60 seconds on a 100 Mbps connection.
 - `docker run --rm ghcr.io/aidevos/aidevos:latest doctor` exits with code 0.
-- `docker compose up -d` starts the backend, and `curl http://localhost:8374/api/v1/health` returns `{"status":"ok"}`.
+- `docker compose up -d` starts Nine Router, Ollama, and the backend; `curl http://localhost:8374/api/v1/health` returns `{"status":"ok"}`.
 - The container passes `docker scout quickview` with zero critical CVEs.
 - Stopping and restarting the container preserves data in `/data` (runs, KB entries, router assignments).
-- The `--profile full` stack starts Postgres, Prometheus, and Grafana alongside the backend and all services communicate.
+- The `--profile full` stack starts Prometheus and Grafana alongside the backend and all services communicate.
 
 ## Related Documents
 

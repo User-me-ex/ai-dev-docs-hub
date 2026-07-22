@@ -191,6 +191,156 @@ async for change in flags.watch("experimental_*"):
 | Flag name collision | Same name in two sections | Last definition wins; log warning |
 | Cache stampede | Many parallel `isEnabled` calls on cache miss | Mutex per flag; compute once; broadcast to waiters |
 
+## Flag Evaluation Flow Diagram
+
+```mermaid
+flowchart TB
+    CHECK[flags.isEnabled(name)] --> EXISTS{Flag defined?}
+    EXISTS -->|no| WARN[Log warning once]
+    WARN --> RETURN[Return false]
+    EXISTS -->|yes| EXPIRED{expires_at\nin the past?}
+    EXPIRED -->|yes| WARN_EXPIRED[Log expired warning]
+    WARN_EXPIRED --> DISABLED[Return false]
+    EXPIRED -->|no| ENABLED{enabled = true?}
+    ENABLED -->|no| DISABLED
+    ENABLED -->|yes| ROLLOUT{Has rollout\npercentage?}
+    ROLLOUT -->|no| GROUP_CHECK{Has enabled\ngroups?}
+    ROLLOUT -->|yes| PERCENT{hash(id) % 100\n< rollout_pct?}
+    PERCENT -->|yes| GROUP_CHECK
+    PERCENT -->|no| DISABLED
+    GROUP_CHECK -->|no groups| PASS[Return true]
+    GROUP_CHECK -->|has groups| GROUPS{current group\nin enabled_groups?}
+    GROUPS -->|yes| PASS
+    GROUPS -->|no| DISABLED
+```
+
+## Flag Definition Schema (Full)
+
+```toml
+[flags.flag_name]
+description = "Human-readable description"
+enabled = false                              # Master switch
+group = "experimental"                       # experimental | beta | internal | released
+expires_at = "2026-10-01"                    # ISO 8601 or empty for permanent
+owner = "team-name"                          # Responsible team
+rollout_percentage = 0                       # 0-100, 0 means disabled for all
+enabled_groups = []                          # ["staff", "early-access"]
+compile_time = false                         # true = build-time feature gate
+depends_on = []                              # ["other_flag_name"] - dependencies
+metadata = {}                                # Arbitrary key-value metadata
+```
+
+## Targeting Rules
+
+Targeting rules determine which users or workspaces see a flag:
+
+| Rule Type | Configuration | Evaluation |
+|-----------|---------------|------------|
+| Percentage | `rollout_percentage = 25` | `hash(workspace_id) % 100 < 25` |
+| Group | `enabled_groups = ["staff", "beta"]` | `current_group in enabled_groups` |
+| Environment | Environment variable `AIDEVOS_ENV` | `env == "staging"` |
+| Workspace ID | `target_workspaces = ["ws_abc"]` | `workspace_id in target_workspaces` |
+
+Multiple rules are combined with OR: if ANY rule matches, the flag is enabled for that context.
+
+## Gradual Rollout Algorithm
+
+```
+function isEnabled(flag, context):
+    if not flag.enabled:
+        return false
+    if flag.expires_at and flag.expires_at < now():
+        return false
+    if flag.rollout_percentage > 0:
+        hash = hashCode(context.workspace_id)
+        if hash % 100 < flag.rollout_percentage:
+            return true
+    if flag.enabled_groups:
+        if context.group in flag.enabled_groups:
+            return true
+    if flag.target_workspaces:
+        if context.workspace_id in flag.target_workspaces:
+            return true
+    // If no targeting configured and enabled=true, return true
+    if flag.rollout_percentage == 0 and not flag.enabled_groups and not flag.target_workspaces:
+        return true
+    return false
+```
+
+## A/B Test Configuration
+
+Feature flags can be used for A/B testing by configuring split percentages:
+
+```toml
+[flags.new_ui_layout]
+description = "New UI layout for workspace dashboard"
+enabled = true
+group = "experimental"
+owner = "team-ux"
+rollout_percentage = 50   # 50% of workspaces see the new layout
+```
+
+A/B test results are collected via the metrics pipeline:
+- `flag_ab_exposed_total{flag_name, variant}` — counter of exposures
+- `flag_ab_conversion_total{flag_name, variant, event}` — counter of conversion events
+
+## Flag Lifecycle (Detailed)
+
+| Stage | Duration | Actions | Artifacts |
+|-------|----------|---------|-----------|
+| **Propose** | 1 day | File proposal; define name, group, rollout plan, success criteria | Flag proposal doc |
+| **Evaluate** | 1-2 sprints | Add flag to code; implement checks; test in dev | PR with flag def + code |
+| **Ship** | Gradual (days-weeks) | Internal → 10% → 25% → 50% → 100% → GA | SCE events per rollout change |
+| **Remove** | 1 sprint | Remove flag checks; archive flag def; ship cleanup PR | PR removing flag code |
+
+## Kill Switch Procedure
+
+When a flag causes production issues, the kill switch procedure is:
+
+```
+1. Identify the problematic flag (e.g., experimental_agent_routing)
+2. Disable immediately:
+   aidevos flags disable experimental_agent_routing
+3. Verify the disable took effect:
+   aidevos flags list | grep experimental_agent_routing
+4. The SCE event flag.experimental_agent_routing.disabled is emitted
+5. All nodes pick up the change within 100 ms (SCE sync)
+6. Code paths revert to the previous behavior automatically
+7. Root cause investigation begins; flag is not re-enabled until fixed
+```
+
+## Failure Modes (Expanded)
+
+| Failure | Detection | Response |
+|---------|-----------|----------|
+| Unknown flag checked | `isEnabled("nonexistent")` | Returns `false`; logs warning once per flag |
+| Flags file unreadable | Startup: can't open `flags.toml` | All flags default to `disabled`; emit `flags.file_missing` |
+| Flags file parse error | Startup: TOML parse error | All flags default to `disabled`; log error with line number |
+| SCE sync failure | `flag.changed` event not received within 1000 ms | Use cached flag state; emit `flags.sync_lag` |
+| Expired flag still in code | Startup: warns for each expired flag | Flag treated as always-disabled; owner auto-assigned to ticket |
+| Rollout percentage > 100 | Validation on load | Clamped to 100; log warning |
+| Flag name collision | Same name in two sections | Last definition wins; log warning |
+| Cache stampede | Many parallel `isEnabled` calls on cache miss | Mutex per flag; compute once; broadcast to waiters |
+| Circular dependency | Flag A depends on B, B depends on A | Detection at load; break circle by treating both as disabled |
+
+## Observability / Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `flag_evaluations_total` | Counter | flag_name, result (enabled/disabled) | Flag evaluation count |
+| `flag_cache_hit_ratio` | Gauge | flag_name | Cache effectiveness |
+| `flag_sync_lag_seconds` | Gauge | flag_name | SCE sync latency |
+| `flag_expired_warnings_total` | Counter | flag_name | Expired flag warnings |
+
+## Acceptance Criteria
+
+- An unknown flag always returns `false` and logs a warning at most once.
+- Disabling a flag via CLI takes effect on all cluster nodes within 100 ms.
+- A flag with `enabled = false` is always disabled regardless of targeting rules.
+- A flag with `expires_at` in the past is treated as disabled with a warning.
+- Rollout percentage targeting correctly distributes across workspace IDs.
+- Kill switch disable propagates within 100 ms and reverts behavior.
+
 ## Related Documents
 
 - [Configuration](./CONFIGURATION.md) — config file format, dynamic reload, precedence

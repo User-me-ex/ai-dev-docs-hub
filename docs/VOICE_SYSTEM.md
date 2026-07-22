@@ -11,7 +11,7 @@ The Voice System is the ninth of the Nine Roles ("Voice") in the [Nine Router](.
 ## Goals
 
 - Local-first: Whisper + Piper provide offline STT/TTS with no API key required.
-- Cloud fallback: OpenAI Whisper API, ElevenLabs, Google Cloud Speech-to-Text can be configured as fallbacks.
+- Cloud fallback: Cloud STT/TTS providers are configured inside Nine Router and routed through it — not called directly.
 - Wake-word detection: a lightweight always-on detector (OpenWakeWord or Porcupine) triggers the STT pipeline.
 - Latency budget: < 500 ms from end of speech to first audio chunk of the TTS response.
 - Voice-to-goal routing: transcribed speech is routed to the Kernel as a `Goal` with `source: "voice"`.
@@ -76,9 +76,7 @@ STT converts the captured audio buffer to text. The active STT backend is determ
 |---------|----------|-------|
 | Whisper local (default) | `local/whisper-base.en` | ≤ 400 ms p95 on M1; fully offline |
 | Whisper local (high quality) | `local/whisper-large-v3` | ≤ 2 s p95; offline |
-| OpenAI Whisper API | `openai/whisper-1` | Cloud; requires API key |
-| Google Cloud STT | `google/latest_long` | Cloud; streaming available |
-| Deepgram | `deepgram/nova-2` | Cloud; lowest latency cloud option |
+| Cloud STT (via Nine Router) | configured in Nine Router | Optional; routed through Nine Router at localhost:20128 |
 
 Audio format requirements: 16-bit PCM, 16 kHz sample rate, mono. The Voice System resamples if needed.
 
@@ -116,9 +114,8 @@ The TTS engine converts the Kernel's text response to audio. It MUST begin strea
 | Backend | Model ID | Notes |
 |---------|----------|-------|
 | Piper local (default) | `local/piper-en_US-amy-medium` | ≤ 150 ms first chunk; offline; multiple voices |
-| OpenAI TTS | `openai/tts-1` | Cloud; `alloy`, `echo`, `fable`, `onyx`, `nova`, `shimmer` |
-| ElevenLabs | `elevenlabs/<voice_id>` | Cloud; highest naturalness; streaming |
 | Coqui TTS | `local/coqui-v2` | Local; cloneable voices |
+| Cloud TTS (via Nine Router) | configured in Nine Router | Optional; routed through Nine Router |
 
 TTS configuration:
 ```
@@ -207,10 +204,10 @@ VoiceEvent {
 | Mode | Detection | Response |
 |------|-----------|----------|
 | Microphone permission denied | OS audio permission error | Surface clear consent prompt; disable voice features until granted |
-| Whisper model not downloaded | Model file missing | Offer one-click download; fall back to cloud STT if configured |
+| Whisper model not downloaded | Model file missing | Offer one-click download; fall back to cloud STT via Nine Router if configured |
 | STT produces empty transcript | Confidence < `min_confidence` or empty string | Ask user to repeat; emit `voice.low_confidence` event |
 | TTS audio device unavailable | Audio playback error | Fall back to text-only output; emit `voice.tts_unavailable` |
-| Cloud STT/TTS unavailable | API error | Fall back to local model; emit `voice.cloud_fallback` |
+| Cloud STT/TTS unavailable (via Nine Router) | API error | Fall back to local model; emit `voice.cloud_fallback` |
 | Wake-word false positives | High false-positive rate | Reduce VAD aggressiveness; surface tuning suggestions |
 | Latency budget exceeded | First audio chunk > 500 ms | Log `voice.latency_exceeded`; switch to faster model automatically if configured |
 
@@ -218,9 +215,9 @@ Every failure emits a structured event on the SCE and is recorded in the [Audit 
 
 ## Security Considerations
 
-- Audio is the most privacy-sensitive input. Raw audio MUST NOT leave the device unless the user explicitly chooses a cloud STT provider.
+- Audio is the most privacy-sensitive input. Raw audio MUST NOT leave the device unless the user explicitly chooses a cloud STT provider via Nine Router.
 - Wake-word detectors run locally; the keyword itself is never transmitted.
-- Cloud provider calls go through the Kernel-proxied HTTP client; they appear in the [Audit Log](./AUDIT_LOG.md).
+- Cloud provider calls go through Nine Router; they appear in the [Audit Log](./AUDIT_LOG.md).
 - Voice sessions are scoped to a workspace; cross-workspace voice routing is not permitted.
 - See [Privacy](./PRIVACY.md), [Security Model](./SECURITY_MODEL.md), and [Data Retention](./DATA_RETENTION.md).
 

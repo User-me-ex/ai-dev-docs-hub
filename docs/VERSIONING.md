@@ -144,6 +144,114 @@ The release build pipeline (see [Release Process](./RELEASE_PROCESS.md)) produce
 - Documentation archive tagged with the same release tag
 - CHANGELOG entry covering all surface changes
 
+## Version Lifecycle Diagram
+
+```mermaid
+stateDiagram-v2
+    [*] --> Development
+    Development --> Alpha: feature complete
+    Alpha --> Beta: stabilization
+    Beta --> RC: release candidate
+    RC --> Stable: signed off
+    Stable --> LTS: 6-month cycle
+    Stable --> EOL: superseded
+    LTS --> Maintenance: 6 months
+    Maintenance --> EOL: 12 months total
+    EOL --> [*]
+
+    note right of Development: MAJOR.MINOR-dev
+    note right of Alpha: MAJOR.MINOR-alpha.N
+    note right of Beta: MAJOR.MINOR-beta.N
+    note right of RC: MAJOR.MINOR-rc.N
+    note right of Stable: MAJOR.MINOR.PATCH
+    note right of LTS: MAJOR.0.x (even MAJOR)
+```
+
+## Semantic Versioning Policy
+
+All AI Dev OS versioned surfaces follow [Semantic Versioning 2.0.0](https://semver.org/) with the following clarifications:
+
+- **MAJOR** (X.0.0): Breaking changes to the public API, CLI commands, configuration format, or data schema. Users MUST follow the migration guide.
+- **MINOR** (0.Y.0): New features, new API endpoints, new CLI commands, new subsystem additions. Backward compatible with the same MAJOR version.
+- **PATCH** (0.0.Z): Bug fixes, performance improvements, documentation updates, dependency bumps with no behavioral change.
+
+Pre-release versions (`-alpha`, `-beta`, `-rc`) are excluded from the stability guarantee. Users running pre-release versions MUST expect breaking changes without notice.
+
+## Breaking Change Detection
+
+Breaking changes are detected and enforced through automated checks in CI:
+
+1. **API contract check**: A previous-version OpenAPI spec is compared against the current spec. Removed endpoints, changed schemas, and new required fields are flagged.
+2. **CLI sniff test**: The `--help` output of the previous binary is compared against the current binary. Removed commands or flags are flagged.
+3. **Config compatibility**: Previous-version config files are parsed by the current binary. Parse failures are flagged.
+4. **Database migration test**: A database created by the previous version is opened, queried, and closed by the current binary. Failures are flagged.
+5. **Prompt format test**: Previous-version prompt outputs are parsed by the current prompt parser. Parsing failures are flagged.
+
+If any check fails, the CI pipeline blocks the release and requires a MAJOR version bump.
+
+## Dependency Version Resolution Algorithm
+
+```
+function resolveDependencies(platform_version, requirements):
+    sorted = topologicalSort(requirements)
+    for each dep in sorted:
+        candidates = filter(available_versions, compatible(dep.constraint, platform_version))
+        if candidates is empty:
+            throw ResolutionError("No compatible version for " + dep.name)
+        selected = selectBest(candidates, prefer_minor_upgrade)
+        dep.version = selected
+    return locked requirements
+
+function compatible(constraint, platform_version):
+    // constraint: ">=0.1.0 <1.0.0"
+    // returns true if any version matching constraint exists
+    return semver.satisfies(platform_version, constraint)
+```
+
+## Version Compatibility Matrix
+
+| Platform Ver | DB Schema | REST API | WS API | Prompts | Docs |
+|-------------|-----------|----------|--------|---------|------|
+| 0.1.x | 1 | v1 | 1 | 0.1.x | 0.1.x |
+| 0.2.x | 2 | v1 | 1 | 0.2.x | 0.2.x |
+| 0.3.x | 3 | v1 | 1 | 0.3.x | 0.2.x |
+| 1.0.x | 10 | v1 | 2 | 1.0.x | 1.0.x |
+
+Database backward compatibility is maintained for 2 minor platform versions. API version `v1` is supported until `v3` ships.
+
+## Migration Version Ordering
+
+When multiple schema migrations exist, they MUST be applied in strict sequential order:
+
+```
+migrations/
+├── 1_2_initial_schema.sql
+├── 2_3_add_memory_table.sql
+├── 3_4_add_vector_index.sql
+├── 4_5_add_sce_topics.sql
+└── 5_6_add_audit_log.sql
+```
+
+The migration runner reads `PRAGMA user_version`, applies all migrations with a higher version number in order, and commits each migration in a transaction.
+
+## Failure Modes
+
+| Mode | Detection | Response |
+|------|-----------|----------|
+| Schema migration fails | SQL error during migration | Roll back transaction; log error; exit with code 3 |
+| Version mismatch (binary < DB) | user_version > expected | Warn user; refuse to write; allow read-only mode |
+| Version mismatch (binary > DB) | user_version < expected | Apply pending migrations automatically |
+| Breaking change undetected | CI comparison fails | Block release; require MAJOR bump |
+| Pre-release version in production | Version contains `-alpha`/`-beta`/`-rc` | Warn on startup; exclude from "latest" |
+
+## Acceptance Criteria
+
+- Running a database from version 0.1.x on platform version 0.3.x succeeds with automatic migration applied.
+- Running the binary against a newer database version prints a warning and enters read-only mode.
+- CI blocks a PR that removes a CLI command without a MAJOR version bump.
+- Upgrading from 0.1.0 to 0.2.0 applies all intermediate migrations exactly once.
+- The `aidevos version` command outputs the platform version in semver format.
+
 ## Related Documents
 
 - [Release Process](./RELEASE_PROCESS.md)

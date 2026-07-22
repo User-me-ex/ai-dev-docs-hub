@@ -1,10 +1,12 @@
 # OpenAI Integration
 
-> Provider adapter implementation guide for the OpenAI and Azure OpenAI APIs. This document extends [Model Providers](./MODEL_PROVIDERS.md) with OpenAI-specific configuration, error handling, streaming behavior, and capabilities mapping. Implementations MUST satisfy every MUST clause below.
+> OpenAI provider configuration for Nine Router. All model access flows through Nine Router at `http://localhost:20128/v1`. This document describes how OpenAI is configured as a routing target within Nine Router. See [Nine Router Integration](./NINE_ROUTER_INTEGRATION.md) for the integration point.
 
 ## Overview
 
-The OpenAI adapter connects the Nine Router to OpenAI's API and any OpenAI-compatible endpoint (Azure OpenAI, Together AI, Groq, Fireworks). It implements the standard `ProviderAdapter` interface with additional logic for token accounting, response format negotiation, and rate-limit backoff.
+This document describes how to register and configure OpenAI as a provider within the [Nine Router](./NINE_ROUTER.md) provider registry. Once configured, the AI Dev OS accesses OpenAI models through Nine Router's standard `/v1/chat/completions` endpoint — never directly. Nine Router handles format translation, API key management, and fallback routing automatically.
+
+The OpenAI adapter inside Nine Router connects to OpenAI's API and any OpenAI-compatible endpoint (Azure OpenAI, Together AI, Groq, Fireworks). It implements the standard `ProviderAdapter` interface with additional logic for token accounting, response format negotiation, and rate-limit backoff.
 
 ## Endpoint Configuration
 
@@ -12,7 +14,7 @@ The OpenAI adapter connects the Nine Router to OpenAI's API and any OpenAI-compa
 
 ```
 base_url: https://api.openai.com/v1
-auth:     Authorization: Bearer ${OPENAI_API_KEY}
+auth:     Authorization: Bearer ${OPENAI_API_KEY}   # Managed in Nine Router Secrets
 ```
 
 ### Azure OpenAI

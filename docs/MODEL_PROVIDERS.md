@@ -1,17 +1,17 @@
 # Model Providers
 
-> Specification for the adapters that connect each model provider to the Nine Router, including authentication, capabilities mapping, error handling, and per-provider endpoint tables. This document is normative — implementations MUST satisfy every MUST clause below.
+> Internal Nine Router adapter specification. These adapters live inside Nine Router — the AI Dev OS Kernel never interacts with providers directly. See [Nine Router Integration](./NINE_ROUTER_INTEGRATION.md) for the integration point.
 
 ## Overview
 
-Model Providers is the layer between the [Nine Router](./NINE_ROUTER.md) / [Dynamic Workers](./DYNAMIC_WORKERS.md) and the actual inference APIs. Every provider — whether local (Ollama, llama.cpp, MLX) or cloud (OpenAI, Anthropic, Google, Mistral) — is accessed through a standard `ProviderAdapter` interface. This ensures that the Nine Router can add or remove providers without changing any higher-level logic.
+Model Providers documents the internal adapter layer of [Nine Router](./NINE_ROUTER.md) — the component that translates Nine Router's unified API calls into provider-specific requests. Every provider — whether local (Ollama, LM Studio, llama.cpp, vLLM, MLX) or cloud (OpenAI, Anthropic, Google, Mistral) — is accessed through a standard `ProviderAdapter` interface. This ensures that Nine Router can add or remove providers without changing the AI Dev OS Kernel.
 
 A provider adapter is responsible for:
-1. **Discovery**: calling the provider's models endpoint and returning normalized `Model[]`.
+1. **Discovery**: calling the provider's models endpoint and returning normalized `Model[]` to Nine Router's cache.
 2. **Inference**: streaming chat completions (and optionally embeddings) through a consistent interface.
-3. **Health tracking**: detecting rate-limits, auth errors, and transient failures and publishing status to the SCE.
+3. **Health tracking**: detecting rate-limits, auth errors, and transient failures and publishing status to Nine Router's dashboard.
 
-Provider adapters may also be contributed by third-party plugins (see [Plugin SDK](./PLUGIN_SDK.md)).
+Provider adapters may also be contributed by third-party plugins (see [Plugin SDK](./PLUGIN_SDK.md)). All credential management happens within Nine Router's Secrets Management — the AI Dev OS Kernel never sees or handles provider API keys.
 
 ## Goals
 
@@ -112,7 +112,7 @@ GET /api/version → { version: string }   # 200 = healthy; connection refused =
 
 ```
 base_url: https://api.openai.com   (configurable for Azure / proxy)
-auth: Authorization: Bearer ${OPENAI_API_KEY}
+auth: Authorization: Bearer ${OPENAI_API_KEY}   # Managed in Nine Router Secrets
 
 # Discovery
 GET /v1/models → { data: [{ id, object, created, owned_by }] }
@@ -144,7 +144,7 @@ POST /v1/embeddings { model, input: string | string[] }
 
 ```
 base_url: https://api.anthropic.com
-auth: x-api-key: ${ANTHROPIC_API_KEY}
+auth: x-api-key: ${ANTHROPIC_API_KEY}           # Managed in Nine Router Secrets
       anthropic-version: 2023-06-01
 
 # Discovery
@@ -171,7 +171,7 @@ Tool use: Anthropic uses `tool_use` content blocks; the adapter maps these to `C
 
 ```
 base_url: https://generativelanguage.googleapis.com
-auth: ?key=${GOOGLE_API_KEY}  OR  Authorization: Bearer ${access_token}
+auth: ?key=${GOOGLE_API_KEY}  OR  Authorization: Bearer ${access_token}   # Managed in Nine Router Secrets
 
 # Discovery
 GET /v1beta/models → { models: [{ name, displayName, supportedGenerationMethods }] }

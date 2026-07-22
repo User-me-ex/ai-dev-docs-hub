@@ -1,30 +1,42 @@
 # Nine Router
 
-> Model discovery, provider grouping, role assignment, and fallback-chain management across every connected AI provider.
+> Mandatory model gateway. The AI Development Operating System's single point of access for all AI inference, model discovery, embedding, and audio processing.
 
 ## Overview
 
-The Nine Router is the model-routing and role-assignment subsystem of AI Dev OS. It is the single point of truth for "which model is active for each of the nine canonical roles." The Router discovers every model reachable from the workspace, normalises their metadata into a common schema, groups them by provider, exposes a filterable UI, and lets the user (or the [Main AI Kernel](./MAIN_AI_KERNEL.md)) assign models to roles with optional per-project overrides and fallback chains.
+Nine Router is the mandatory model gateway for the AI Development Operating System. It runs as a local service at `http://localhost:20128/v1` and exposes an OpenAI-compatible REST API. Every inference request, model list query, streaming request, embedding call, and audio processing request from the AI Dev OS Kernel MUST pass through Nine Router. No subsystem may call any provider directly.
 
-The Nine Router is not a load balancer and it is not a proxy. It produces a `ModelBinding` for each role, which the Kernel hands to [Dynamic Workers](./DYNAMIC_WORKERS.md) at task-start time. Actual provider I/O is then handled exclusively by [Model Providers](./MODEL_PROVIDERS.md).
+Nine Router provides:
+- **OpenAI-compatible API surface** — `/v1/chat/completions`, `/v1/models`, `/v1/embeddings`, `/v1/audio/speech`, `/v1/audio/transcriptions`, `/v1/images/generations`, `/v1/search`
+- **Format translation** — converts between OpenAI, Claude, Gemini, Codex, and Kiro request/response formats
+- **3-tier fallback routing** — Subscription → Cheap → Free providers
+- **Provider registry** — configure 40+ providers via dashboard or API
+- **OAuth and API key authentication** — per-provider credential management
+- **Model discovery** — `/v1/models` returns all configured providers' models
+- **Role assignment** — maps the nine canonical Kernel roles to model IDs
 
-Every decision the Router makes is published as an event on the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md) so that other subsystems (Cost Management, Observability, the CLI) can react to role changes without polling.
+The Nine Router receives a `ModelBinding` specification from the Kernel and resolves it to a provider endpoint, applies format translation, manages credentials, handles fallback chains, and streams the response back in OpenAI-compatible format.
+
+The Core AI Dev OS Kernel knows only the Nine Router API. It never references specific providers. Provider names (OpenAI, Anthropic, Google, etc.) are configured within Nine Router, not in the Kernel.
 
 ## Goals
 
-- Discover every model available across all configured providers by querying each provider's `/models` endpoint (or documented equivalent) with a single normalised adapter interface.
-- Group and display results in a stable provider order: Local → OpenAI → Anthropic → Google → Mistral → MCP-exposed catalogs → User-registered.
-- Let the user or Kernel assign any discovered model to any of the nine roles, with per-project and per-group overrides on top of workspace defaults.
-- Support ordered fallback chains per role so the Kernel can slide down the chain on provider errors without re-entering the Router.
-- Degrade per provider: one unreachable provider MUST NOT block discovery for others.
-- Publish `router.assignments` events whenever a role assignment changes so subscribers update without polling.
+- Serve as the single gateway for ALL AI model access: chat completions, embeddings, audio, image generation, and search.
+- Expose an OpenAI-compatible REST API at `http://localhost:20128/v1` that the AI Dev OS Kernel and any OpenAI-compatible tool can use.
+- Discover every model available across all configured providers by querying each provider's `/models` endpoint internally.
+- Group and display results in a stable provider order: Local → OpenAI → Anthropic → Google → OpenRouter → MCP-exposed catalogs → User-registered.
+- Let the user configure providers, API keys, and model assignments via the Nine Router dashboard at `http://localhost:20128/dashboard`.
+- Support ordered fallback chains per model so the Kernel can slide down the chain on provider errors without re-entering the Router.
+- Translate request/response formats between OpenAI, Claude, Gemini, Codex, and Kiro formats automatically.
+- Degrade per provider: one unreachable provider MUST NOT block discovery or inference for others.
+- Keep all provider credentials managed within Nine Router; the AI Dev OS Kernel never sees raw API keys.
 
 ## Non-Goals
 
-- Actual provider I/O — belongs in [Model Providers](./MODEL_PROVIDERS.md).
+- Provider implementation details — provider-specific adapter behavior is documented per-provider.
 - Model performance benchmarking — belongs in [Benchmarks](./BENCHMARKS.md).
 - Cost accounting beyond pricing hints from the provider catalog — belongs in [Cost Management](./COST_MANAGEMENT.md).
-- Implementation code — this repository is documentation-only (see [AI Coding Rules](./AI_CODING_RULES.md)).
+- Running models directly — Nine Router routes to providers; it does not host models itself.
 
 ## The Nine Roles
 
@@ -52,69 +64,97 @@ Each role maps to a distinct responsibility in the Kernel loop. Every role MUST 
 
 ## Model Discovery
 
-Discovery is the mechanism by which the Router learns what models exist. See [Model Discovery](./MODEL_DISCOVERY.md) for the complete adapter-by-adapter specification. The key contracts from the Router's perspective:
+The AI Dev OS Kernel discovers models by calling `GET http://localhost:20128/v1/models` on Nine Router. This endpoint returns all models across all configured providers in OpenAI-compatible format.
 
-- Discovery runs on three triggers: **manual Refresh** (UI or `aidevos models refresh`), **scheduled** (via [Job Scheduler](./JOB_SCHEDULER.md), default every 10 minutes), and **credential change** (a new or updated provider key triggers a targeted refresh for that provider only).
-- Each provider's response is normalised into the [canonical `Model` schema](./MODEL_DISCOVERY.md#canonical-schema).
+Discovery is the mechanism by which Nine Router learns what models exist. Internally, Nine Router queries each configured provider and normalises the results:
+
+- Discovery runs on three triggers: **manual Refresh** (dashboard or API), **scheduled** (default every 10 minutes), and **credential change** (a new or updated provider key triggers a targeted refresh for that provider only).
+- Each provider's response is normalised into a canonical `Model` schema with provider-prefixed model IDs (e.g. `ollama/llama3.1:8b`, `kr/claude-sonnet-4.5`, `openai/gpt-4o`).
 - A `DiscoveryReport` is published on the `models.discovery` SCE topic after every run; the Router UI subscribes and updates without a page reload.
-- The Router caches the last successful `Model[]` per provider with a configurable TTL (default `10m`). The `list()` call always reads from cache; it never hits providers.
+- Nine Router caches the last successful `Model[]` per provider with a configurable TTL (default `10m`).
 
-### Provider endpoint table
+### Provider Routing Table
 
-| Provider  | Endpoint | Auth method |
-|-----------|----------|-------------|
-| OpenAI | `GET https://api.openai.com/v1/models` | `Authorization: Bearer <key>` |
-| Anthropic | `GET https://api.anthropic.com/v1/models` | `x-api-key`, `anthropic-version` |
-| Google | `GET https://generativelanguage.googleapis.com/v1beta/models` | `?key=…` or ADC |
-| Mistral | `GET https://api.mistral.ai/v1/models` | `Authorization: Bearer <key>` |
-| Ollama | `GET http://localhost:11434/api/tags` | none |
-| llama.cpp | `GET http://localhost:8080/v1/models` (OpenAI-compat) | none |
-| MLX | Filesystem scan of model cache | none |
-| MCP servers | `tools/list` on servers advertising `model` resources | per-server |
-| User-registered | Configurable base URL + auth | configurable |
+Nine Router internally routes to configured providers. This table describes the upstream endpoints Nine Router uses — the AI Dev OS Kernel never accesses these directly:
+
+| Provider  | Upstream Endpoint | Auth method | Type |
+|-----------|-------------------|-------------|------|
+| Ollama | `http://localhost:11434` | None | Local (default) |
+| LM Studio | `http://localhost:1234` | None | Local |
+| llama.cpp | `http://localhost:8080` | None | Local |
+| vLLM | `http://localhost:8000` | None | Local |
+| MLX | Filesystem scan | None | Local |
+| OpenAI | `https://api.openai.com/v1` | API Key | Cloud (optional) |
+| Anthropic | `https://api.anthropic.com/v1` | API Key | Cloud (optional) |
+| Google | `https://generativelanguage.googleapis.com/v1beta` | API Key | Cloud (optional) |
+| OpenRouter | `https://openrouter.ai/api/v1` | API Key | Cloud (optional) |
+| MCP servers | Per-server config | Per-server | Local/external |
+
+Providers are configured via the Nine Router dashboard at `http://localhost:20128/dashboard`. See [Nine Router Integration](./NINE_ROUTER_INTEGRATION.md) for setup instructions.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  subgraph Triggers
-    UI[UI Refresh button]
-    CRON[Cron / Scheduler]
-    CRED[Credential change]
-  end
-  Triggers --> DISP[Discovery Dispatcher]
-
-  subgraph Adapters
-    OAI[OpenAI adapter]
-    ANT[Anthropic adapter]
-    GOO[Google adapter]
-    MIS[Mistral adapter]
-    OLL[Ollama adapter]
-    LOC[Local adapter\nllama.cpp / MLX]
-    MCP[MCP adapter]
-    USR[User-registered adapter]
+  subgraph AI_Dev_OS["AI Dev OS (localhost:3090)"]
+    KERNEL[Main AI Kernel]
+    WORKER[Dynamic Worker]
+    CLI[CLI: aidevos]
   end
 
-  DISP --> Adapters
-  Adapters --> NORM[Normalizer]
-  NORM --> DEDUP[Alias resolver / deduplicator]
-  DEDUP --> CACHE[(TTL model cache)]
-  DEDUP --> BUS[(SCE: models.discovery)]
+  subgraph NINE_ROUTER["Nine Router (localhost:20128/v1)"]
+    API[OpenAI-compatible API]
+    DISP[Discovery Dispatcher]
+    TRANS[Format Translator]
+    FALLBACK[3-Tier Fallback Engine]
+    CACHE[(Model Cache)]
 
-  subgraph Router UI
-    SEARCH[Search]
-    FILTER[Filter]
-    ASSIGN[Assign to role]
-    FALLBACK[Fallback chains]
+    subgraph Adapters
+      OLL[Ollama adapter]
+      LOC[Local adapter\nLM Studio / llama.cpp / vLLM]
+      MCP[MCP adapter]
+      OAI[OpenAI adapter]
+      ANT[Anthropic adapter]
+      GOO[Google adapter]
+      OSR[OpenRouter adapter]
+      USR[User-registered adapter]
+    end
+
+    DISP --> Adapters
+    Adapters --> CACHE
+    API --> TRANS
+    TRANS --> Adapters
+    API --> FALLBACK
+    FALLBACK --> Adapters
   end
 
-  BUS --> Router_UI
-  CACHE --> Router_UI
+  KERNEL -->|"GET /v1/models"| API
+  KERNEL -->|"POST /v1/chat/completions"| API
+  WORKER -->|"POST /v1/chat/completions"| API
+  CLI -->|"models / router cmds"| API
 
-  ASSIGN --> POLICY[(router.assignments SCE topic)]
-  POLICY --> KERNEL[Main AI Kernel]
-  POLICY --> COST[Cost Management]
-  POLICY --> CLI[CLI: aidevos router]
+  subgraph LOCAL_PROVIDERS["Local Providers (default)"]
+    OLLAMA[Ollama :11434]
+    LM[LM Studio :1234]
+    CPP[llama.cpp :8080]
+    VLLM[vLLM :8000]
+  end
+
+  subgraph CLOUD_PROVIDERS["Cloud Providers (optional)"]
+    OAI_PROV[OpenAI]
+    ANT_PROV[Anthropic]
+    GOO_PROV[Google]
+    OSR_PROV[OpenRouter]
+  end
+
+  OLL --> OLLAMA
+  LOC --> LM
+  LOC --> CPP
+  LOC --> VLLM
+  OAI --> OAI_PROV
+  ANT --> ANT_PROV
+  GOO --> GOO_PROV
+  OSR --> OSR_PROV
 ```
 
 ## Requirements

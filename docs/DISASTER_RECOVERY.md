@@ -147,6 +147,144 @@ If any verification step fails, the recovery is incomplete. Refer to the specifi
 
 Each test produces a structured report published to the [Audit Log](./AUDIT_LOG.md). Findings that affect RPO/RTO MUST be remediated within 30 days.
 
+## DR Workflow Diagram
+
+```mermaid
+flowchart TB
+    DISASTER{Disaster Occurs} --> EVAL{Assess Impact}
+    EVAL --> DISK[Disk Failure]
+    EVAL --> CORRUPT[DB Corruption]
+    EVAL --> DELETION[Accidental Deletion]
+    EVAL --> RANSOM[Ransomware]
+    EVAL --> SITE[Site Loss]
+
+    DISK --> RESTORE_DB[Restore DB from backup]
+    CORRUPT --> ATTEMPT_RECOV[Attempt sqlite3 .recover]
+    ATTEMPT_RECOV -->|succeeds| RESTORE_DB
+    ATTEMPT_RECOV -->|fails| RESTORE_DB
+    DELETION --> PITR[Point-in-time recovery]
+    RANSOM --> ISOLATE[Isolate & restore from immutable backup]
+    SITE --> FAILOVER[Promote secondary region]
+
+    RESTORE_DB --> VALIDATE[Validate with aidevos doctor --full]
+    PITR --> VALIDATE
+    ISOLATE --> VALIDATE
+    FAILOVER --> VALIDATE
+    VALIDATE -->|pass| RESUME[Resume normal operation]
+    VALIDATE -->|fail| ESCALATE[Escalate to on-call engineer]
+```
+
+## Backup Types
+
+| Type | Scope | Frequency | Storage | RPO Contribution |
+|------|-------|-----------|---------|------------------|
+| **Full** | Complete database + config + secrets | Daily | Compressed archive | 24 hours |
+| **Incremental** | Changes since last full backup | Hourly | WAL archive | 1 hour |
+| **Differential** | Changes since last full backup | Every 6 hours | SQL diff | 6 hours |
+| **WAL archive** | SQLite WAL files as they fill | Continuous (<10 MB) | WAL sequence | 5 minutes |
+| **Snapshot** | Filesystem-level volume snapshot | Configurable | Cloud snapshot | Configurable |
+
+Incremental backups require the last full backup to be restorable. Differential backups only require the last full backup (not the previous differential).
+
+## Recovery Runbook by Scenario
+
+### Disk Failure
+
+```
+1. Replace failed disk
+2. Mount replacement volume
+3. Restore from latest full backup
+4. Apply latest incremental/WAL archive
+5. Run integrity check
+6. Validate with aidevos doctor --full
+7. Resume normal operation
+```
+
+### Database Corruption
+
+```
+1. Stop aidevos-server
+2. Run: sqlite3 aidevos.db "PRAGMA integrity_check"
+3. If failed, attempt: sqlite3 aidevos.db ".recover" > recovered.sql
+4. If recovery succeeds, rebuild from SQL dump
+5. If recovery fails, restore from backup
+6. Apply WAL archives for PITR
+7. Verify with PRAGMA integrity_check
+8. Start server; validate
+```
+
+### Accidental Deletion
+
+```
+1. Identify scope (workspace, record, config)
+2. Select restore method (PITR or direct restore)
+3. Restore from backup at timestamp before deletion
+4. Extract only the deleted data if possible
+5. Verify restored data
+```
+
+### Ransomware
+
+```
+1. Immediately disconnect from network
+2. Do NOT pay ransom; do NOT reboot
+3. Snapshot volumes for forensics
+4. Restore from air-gapped/immutable backup
+5. Rotate ALL secrets and API keys
+6. Run full security scan
+7. Root cause analysis and report
+```
+
+### Site Loss
+
+```
+1. Activate secondary region
+2. Promote read replica to primary
+3. Update DNS/load balancer
+4. Start aidevos-server in secondary region
+5. Run full validation
+6. Fail back during maintenance window after primary restored
+```
+
+## Backup Encryption
+
+| Backup Component | Encryption Method | Key Management |
+|-----------------|-------------------|----------------|
+| Database backup | AES-256-GCM via age | Age key file + passphrase |
+| WAL archive | AES-256-GCM via age | Same age key |
+| Config backup | Age encryption | Same age key |
+| Secrets backup | Age encryption + separate passphrase | Age key + passphrase |
+| Vector index | Not encrypted (rebuildable) | N/A |
+
+Backup encryption keys MUST be stored separately from the backup media (e.g., in a password manager or HSM).
+
+## Cross-Region Strategy
+
+| Deployment | Strategy | RTO | RPO |
+|------------|----------|-----|-----|
+| SQLite (local) | Backup to cloud object store in primary region; cross-region replication | 30 min | 5 min |
+| Postgres (server) | Cross-region read replica with WAL streaming | 5 min | < 1 min |
+| SCE (NATS) | NATS JetStream cross-region mirroring | 1 min | < 1 s |
+
+## Failure Modes
+
+| Mode | Detection | Response |
+|------|-----------|----------|
+| Backup set incomplete | Missing expected backup file | Alert operator; attempt restore from next oldest; document gap |
+| Restored DB fails integrity check | PRAGMA integrity_check fails | Attempt recovery from backup-1; escalate if consistent failure |
+| PITR target outside WAL window | Requested timestamp before oldest WAL | Restore to oldest available point; document data loss window |
+| Cross-region replication lag | Replica lag > RPO target | Throttle primary writes; alert operator |
+| Secrets backup unreadable after restore | Decryption fails | Restore from previous secrets backup; rotate keys |
+
+## Acceptance Criteria
+
+- A full restore from backup to a clean machine completes within RTO targets for each data category.
+- Point-in-time recovery restores a random timestamp with exact state match.
+- All DR tests (monthly/quarterly/semi-annual) produce structured results in the Audit Log.
+- Backup encryption keys are stored separately from backup media.
+- Cross-region failover completes within 5 minutes with zero data loss.
+- Every recovery procedure documented in this file is automated as a `aidevos dr` subcommand.
+
 ## Related Documents
 
 - [Backup Strategy](./BACKUP_STRATEGY.md) — backup methods, schedule, retention, restore procedures

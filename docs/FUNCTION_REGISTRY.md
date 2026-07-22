@@ -142,6 +142,165 @@ Aggregated metrics (call count, p50/p95/p99 latency, error rate, total cost) are
 
 ---
 
+## Registration Flow Diagram
+
+```mermaid
+flowchart LR
+    SRC[Source Code] --> EXTRACT[Build-Time Extractor]
+    EXTRACT --> VALIDATE{Validate Schema}
+    VALIDATE -->|unique name, valid schema| REG[Register in Memory]
+    VALIDATE -->|conflict| ERROR[RegistryConflictError]
+    REG --> PERSIST[Persist to Symbol Store]
+    PERSIST --> EMIT[Emit registry.changed event]
+    EMIT --> CACHE[Invalidate Dispatch Cache]
+    EMIT --> UI[Update Tool Catalog UI]
+
+    subgraph Dynamic Registration
+        MCP[MCP Server Connect] --> LIST[mcp.list_tools]
+        LIST --> REG_DYN[Register as backend:mcp]
+        PLUGIN[Plugin Load] --> MANIFEST[Read Manifest]
+        MANIFEST --> REG_DYN2[Register as backend:plugin]
+    end
+
+    REG_DYN --> EMIT
+    REG_DYN2 --> EMIT
+```
+
+## Full Interface Specifications
+
+```
+interface FunctionRegistry {
+  register(fn: FunctionDefinition): void
+  lookup(name: string): FunctionDefinition | null
+  find_by_tag(tag: string): FunctionDefinition[]
+  filter(criteria: Partial<FunctionDefinition>): FunctionDefinition[]
+  list_by_backend(backend: string): FunctionDefinition[]
+  list(): FunctionDefinition[]
+  count(): number
+  clear(): void
+  on(event: "registered" | "unregistered" | "changed", handler): void
+}
+```
+
+### `register(fn)` — Detailed workflow:
+
+1. Validates `name` uniqueness — case-sensitive, dot-separated path.
+2. Validates `input_schema` and `output_schema` against JSON Schema v2020-12 meta-schema.
+3. Validates `backend` ∈ {`local`, `remote`, `mcp`, `plugin`}.
+4. Validates `cost` ∈ {`free`, `cheap`, `moderate`, `expensive`}.
+5. If `name` already exists and schema differs → throw `RegistryConflictError`.
+6. If `name` already exists and schema matches → no-op (idempotent).
+7. Inserts into in-memory `Map<name, FunctionDefinition>`.
+8. Persists to symbol store (async, non-blocking).
+9. Emits `registered` event.
+
+### `lookup(name)` — Resolution strategy:
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Registry
+    participant Backend
+    Caller->>Registry: lookup("fs.read_file")
+    Registry->>Registry: check in-memory map
+    alt found
+        Registry-->>Caller: FunctionDefinition
+    else not found
+        Registry->>Registry: check alias map
+        alt found via alias
+            Registry-->>Caller: FunctionDefinition
+        else not found
+            Registry-->>Caller: null
+        end
+    end
+```
+
+## Function Signature Schema
+
+```typescript
+interface FunctionDefinition {
+  name: string;             // e.g. "fs.read_file"
+  description: string;      // human-readable purpose
+  input_schema: {           // JSON Schema v2020-12
+    type: "object",
+    properties: Record<string, SchemaProperty>,
+    required: string[],
+    additionalProperties: boolean
+  };
+  output_schema: {          // JSON Schema v2020-12
+    type: "object" | "string" | "array" | "null",
+    properties?: Record<string, SchemaProperty>
+  };
+  backend: "local" | "remote" | "mcp" | "plugin";
+  cost: CostTier;           // "free" | "cheap" | "moderate" | "expensive"
+  timeout_ms: number;       // max execution time
+  idempotent: boolean;      // safe to retry without side effects
+  tags: string[];           // classification tags
+  source?: string;          // origin identifier for dynamic registrations
+  version?: string;         // function version for conflict resolution
+}
+```
+
+## Overload Resolution
+
+When multiple functions share the same `name` but differ in `input_schema`:
+
+1. The registry stores the most recently registered version.
+2. A `name@version` syntax allows explicit version targeting.
+3. The tool caller performs best-effort schema matching at dispatch:
+   - If arguments match exactly one schema → use that function.
+   - If arguments match multiple → use the highest version.
+   - If arguments match none → raise `NoMatchingOverloadError`.
+
+Overloads are discouraged. Prefer unique names over shared names with different schemas.
+
+## Discovery API
+
+```
+GET /v1/functions
+  Query: ?tag=dangerous&backend=mcp&cost=free
+  Response: FunctionDefinition[]
+
+GET /v1/functions/{name}
+  Response: FunctionDefinition | { error: "not_found" }
+
+POST /v1/functions/search
+  Body: { query: string, filter?: Partial<FunctionDefinition> }
+  Response: FunctionDefinition[]
+```
+
+## Failure Modes
+
+| Mode | Detection | Response |
+|------|-----------|----------|
+| Schema validation failure | JSON Schema validation error | Reject registration; return validation errors |
+| Name conflict | Duplicate name with different schema | Raise `RegistryConflictError`; caller must rename |
+| MCP tool discovery failure | `mcp.list_tools` fails/timeouts | Log warning; retry on next connect; use cached tools |
+| Plugin manifest parse error | Invalid YAML/JSON in manifest | Log error; skip plugin; continue loading others |
+| Backend routing failure | Target backend unavailable | Fall back to default backend if possible; log error |
+| Memory pressure | Registry exceeds memory threshold | Trigger compaction of stale entries; warn |
+
+## Observability / Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `func_registry_total` | Gauge | — | Total registered functions |
+| `func_registry_registrations_total` | Counter | backend, status | Registration attempts |
+| `func_registry_lookups_total` | Counter | status (hit/miss) | Lookup attempts |
+| `func_registry_lookup_duration_ms` | Histogram | — | Lookup latency |
+| `func_registry_conflicts_total` | Counter | — | Registration conflicts |
+| `func_registry_dynamic_added_total` | Counter | source (mcp/plugin) | Dynamic registrations |
+| `func_registry_dynamic_removed_total` | Counter | source | Dynamic unregistrations |
+
+## Acceptance Criteria
+
+- Registering a valid `FunctionDefinition` makes it immediately available via `lookup()`.
+- Re-registering the same name with the same schema is a no-op (idempotent).
+- Re-registering the same name with a different schema raises `RegistryConflictError`.
+- Dynamic registration via MCP tool discovery adds functions visible in `list_by_backend("mcp")`.
+- Removing a plugin unregisters all associated functions.
+- The registry survives process restart via the symbol store persistence layer.
+
 ## Related Documents
 
 - SYMBOL_REGISTRY.md — General-purpose symbol tracking

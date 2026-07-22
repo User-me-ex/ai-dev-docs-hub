@@ -117,6 +117,151 @@ conflict.patterns() → ResolutionPattern[]  # learned patterns
 - A ConflictRecord created for a merge conflict is queryable by `run_id` and contains both parties' positions with artifact snapshots.
 - A resolution pattern from one run is proposed (not auto-applied) when a similar conflict arises in a later run.
 
+## Mediation Agent Protocol
+
+When a technical conflict escalates to a mediator, the following protocol is followed:
+
+```
+1. Mediator Selection:
+   a. Conflict Resolution queries the Nine Router for an agent with domain expertise matching `conflict.topic`
+   b. If no domain-specific agent exists, select the agent with the highest general reasoning score
+   c. The selected mediator receives the full ConflictRecord (both parties' positions, reasoning, artifacts)
+
+2. Mediation Process:
+   a. Mediator reviews both positions independently
+   b. Mediator may request additional context from either party via the SCE
+   c. Mediator proposes a resolution with rationale
+   d. Both parties vote: accept or reject
+   e. If unanimous accept → resolution recorded
+   f. If either rejects → mediator revises or escalates
+
+3. Time Bounds:
+   a. Editorial mediation: 30 seconds max
+   b. Technical mediation: 5 minutes max
+   c. If no resolution within time bound → auto-escalate to human
+```
+
+## Conflict Detection Algorithm
+
+The system detects conflicts through multiple mechanisms:
+
+```python
+def detect_conflicts(run_id: str) -> List[ConflictRecord]:
+    conflicts = []
+
+    # 1. Merge Manager conflicts: concurrent edits to same resource
+    merge_conflicts = merge_manager.pending_conflicts(run_id)
+    for mc in merge_conflicts:
+        conflicts.append(ConflictRecord(
+            tier="editorial",
+            topic=f"Merge conflict on {mc.resource_id}",
+            parties=mc.parties,
+            ts=now()
+        ))
+
+    # 2. Consensus timeouts: consensus protocol failed to converge
+    consensus_failures = consensus.timeouts(run_id)
+    for cf in consensus_failures:
+        conflicts.append(ConflictRecord(
+            tier="technical" if cf.is_technical else "editorial",
+            topic=cf.topic,
+            parties=cf.parties,
+            consensus_round_id=cf.round_id,
+            ts=now()
+        ))
+
+    # 3. Unanimous blocks: all agents agree to block (procedural)
+    unanimous_blocks = consensus.unanimous_blocks(run_id)
+    for ub in unanimous_blocks:
+        conflicts.append(ConflictRecord(
+            tier="procedural",
+            topic=ub.topic,
+            parties=ub.parties,
+            ts=now()
+        ))
+
+    # 4. Mutually exclusive actions detected by the Kernel
+    mutex_violations = kernel.detect_mutex_violations(run_id)
+    for mv in mutex_violations:
+        conflicts.append(ConflictRecord(
+            tier="technical",
+            topic=f"Mutually exclusive: {mv.action_a} vs {mv.action_b}",
+            parties=mv.parties,
+            ts=now()
+        ))
+
+    return conflicts
+```
+
+## Resolution Strategies Catalog
+
+| Strategy | Tier | Algorithm | Description |
+|----------|------|-----------|-------------|
+| **Three-way merge** | Editorial | Line-based diff3 | Merge Manager automatically merges concurrent edits; conflicts flagged for mediation |
+| **Last-writer-wins** | Editorial | Timestamp comparison | When merge is impossible, accept the most recent change; record the overwritten version |
+| **Mediator proposal** | Technical | Expert agent review | Domain-expert agent reviews both positions and proposes a compromise |
+| **Weighted voting** | Technical | Authority-weighted vote | Each agent votes; votes are weighted by domain authority score; highest-weighted position wins |
+| **Human override** | Procedural | Manual review | Human operator reviews the conflict record and issues a binding decision |
+| **Pattern replay** | All | Similarity match | If a resolution pattern matches the current conflict with confidence > 0.8, auto-apply the previous resolution |
+| **Defer and retry** | Technical | Timer + backoff | Postpone resolution; agents continue non-conflicting work; retry mediation after configurable delay |
+
+## Pattern Learning System
+
+Resolution patterns are learned and applied to prevent repeat conflicts:
+
+```python
+class ResolutionPattern:
+    id: ulid
+    conflict_topic: str           # normalized topic string
+    conflict_tier: str            # editorial | technical | procedural
+    context_hash: sha256          # hash of the conflict context (domain, parties, artifact types)
+    resolution_strategy: str      # which strategy was used
+    resolution_outcome: str       # the resolution text
+    apply_count: int              # how many times this pattern has been applied
+    success_rate: float           # 0.0-1.0 — how often the pattern produced a stable resolution
+    created_at: rfc3339
+    last_applied: rfc3339
+
+def learn_pattern(conflict: ConflictRecord) -> ResolutionPattern:
+    # Extract topic, tier, and context from the resolved conflict
+    pattern = ResolutionPattern(
+        conflict_topic=normalize_topic(conflict.topic),
+        conflict_tier=conflict.tier,
+        context_hash=hash_context(conflict),
+        resolution_strategy=conflict.resolution.resolved_by,
+        resolution_outcome=conflict.resolution.outcome,
+        apply_count=0,
+        success_rate=1.0,
+        created_at=now()
+    )
+    # Store in Persistent Memory for future conflict matching
+    store_pattern(pattern)
+    return pattern
+
+def match_pattern(conflict: ConflictRecord) -> ResolutionPattern | None:
+    # Search for patterns matching the new conflict's topic and context
+    candidates = search_patterns(
+        topic=normalize_topic(conflict.topic),
+        min_success_rate=0.7
+    )
+    if candidates:
+        best = max(candidates, key=lambda p: p.success_rate * p.apply_count)
+        if best.success_rate >= 0.8 and best.apply_count >= 3:
+            return best
+    return None
+```
+
+## Observability
+
+| Metric | Labels | Description |
+|--------|--------|-------------|
+| `conflict_total` | `tier` | Total conflicts created by tier |
+| `conflict_resolved_total` | `tier`, `resolved_by` | Conflicts resolved by resolution method |
+| `conflict_resolution_seconds` | `tier`, `strategy` | Time to resolve a conflict |
+| `conflict_escalation_total` | `tier` | Conflicts escalated to human |
+| `conflict_pattern_match_total` | `match` | Pattern match attempts (hit/miss) |
+| `conflict_storm_total` | — | Times a conflict storm (>10/min) was detected |
+
 ## Related Documents
 
 - [Consensus](./CONSENSUS.md) — first-line agreement protocol

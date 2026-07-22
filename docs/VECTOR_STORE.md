@@ -13,9 +13,10 @@ The Vector Store is an Approximate Nearest Neighbor (ANN) index that enables sem
 | Backend | Default | Type | Persistence | Notes |
 |---------|---------|------|-------------|-------|
 | **usearch** | ✅ Default | Embedded (single-file) | `vector_index.usearch` + `vectors.db` (SQLite) | Zero-config. Ships with the binary. Best for local-first. |
-| **pgvector** | — | PostgreSQL extension | External PG instance | Required for multi-workspace shared indexes. |
-| **Qdrant** | — | Standalone service | Docker / cloud | Recommended for HA deployments. |
-| **Pinecone** | — | Managed cloud | Pinecone account | For serverless vector search at scale. |
+| **Chroma** | — | Embedded | `~/.aidevos/data/chroma/` | Local alternative; memory-friendly |
+| **pgvector** | — | PostgreSQL extension | External PG instance | Optional; for multi-workspace shared indexes |
+| **Qdrant** | — | Standalone service | Docker / cloud | Optional; for HA deployments |
+| **Pinecone** | — | Managed cloud | Pinecone account | Optional; for serverless vector search at scale |
 
 ## Local Default: usearch
 
@@ -28,9 +29,11 @@ The embedded usearch index is the default and recommended backend for local-firs
 
 ## Index Configuration
 
+Local defaults (usearch/Chroma) are zero-config — created on first write, loaded on startup. Optional tuning:
+
 ```toml
 [vector_store]
-backend = "usearch"
+backend = "usearch"        # usearch | chroma | pgvector | qdrant | pinecone
 
 [index]
 metric = "cosine"          # One of: cosine, l2, ip
@@ -47,6 +50,8 @@ auto_rebuild_interval = "24h"  # Full rebuild from relational store daily
 max_vectors = 10_000_000   # Max vectors per index
 max_vector_bytes = 10_737_418_240  # ~10 GB
 ```
+
+> **Note:** Chroma and usearch are the default local backends. pgvector is an optional alternative for multi-workspace deployments. Cloud vector stores (Pinecone, Qdrant cloud) are optional and configured independently.
 
 ### HNSW Parameters
 

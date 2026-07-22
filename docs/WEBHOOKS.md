@@ -172,6 +172,184 @@ All delivery attempts, retries, and dead-letter events are recorded in the [Audi
 - Rotating the secret immediately invalidates the old signature; the next delivery uses the new secret.
 - Dead-letter events can be replayed via `webhooks.replay()` and the replay delivery appears in the logs.
 
+## Mermaid Webhook Delivery Flow
+
+```mermaid
+sequenceDiagram
+    participant SCE as Shared Context Engine
+    participant WH as Webhook Dispatcher
+    participant Queue as Delivery Queue
+    participant Target as External Endpoint
+    participant DLQ as Dead Letter Queue
+
+    SCE->>WH: Event matched webhook filter
+    WH->>WH: Build signed payload (HMAC-SHA256)
+    WH->>Queue: Enqueue delivery
+
+    Queue->>Target: POST /webhook (attempt 1)
+    alt 2xx success
+        Target-->>Queue: 200 OK
+        Queue->>WH: Log success; record delivery
+    else 4xx permanent (401, 403, 410)
+        Target-->>Queue: 4xx
+        Queue->>DLQ: Dead letter immediately
+        DLQ->>WH: Emit webhook.dead_letter
+    else 5xx / timeout / network error
+        Target-->>Queue: Error
+        Queue->>Queue: Calculate backoff delay
+        Note over Queue: delay = min(1s * 2^(attempt-1), 60s) ±20% jitter
+
+        Queue->>Target: POST /webhook (attempt 2)
+        Target-->>Queue: Error
+        Queue->>Queue: Calculate backoff
+
+        Queue->>Target: POST /webhook (attempt N)
+        alt max attempts reached
+            Queue->>DLQ: Move to dead letter
+            DLQ->>WH: Emit webhook.dead_letter
+        end
+    end
+```
+
+## Webhook Schema (Full)
+
+```typescript
+interface WebhookRegistration {
+  id: string;                    // auto-generated ULID
+  url: string;                   // HTTPS endpoint
+  events: string[];              // event type patterns ["run.*", "guardian.veto"]
+  secret: string;                // HMAC secret (returned once)
+  retry_policy: {
+    max_attempts: number;        // 1-10, default 5
+    base_delay_ms: number;       // default 1000
+    max_delay_ms: number;        // default 60000
+    multiplier: number;          // default 2.0
+  };
+  headers: Record<string, string>;  // custom headers
+  active: boolean;               // true = receiving deliveries
+  created_at: string;            // RFC 3339
+  updated_at: string;            // RFC 3339
+}
+
+interface DeliveryAttempt {
+  webhook_id: string;
+  event_id: string;
+  delivery_id: string;           // UUID v7 (unique per attempt)
+  attempt_number: number;
+  status: "success" | "failed" | "dead_letter";
+  status_code: number | null;    // HTTP status or null for network error
+  duration_ms: number;
+  timestamp: string;             // RFC 3339
+  error?: string;                // error message on failure
+}
+
+interface DeadLetterEvent {
+  webhook_id: string;
+  event_id: string;
+  deliveries: DeliveryAttempt[];  // All attempts for this event
+  first_failed: string;          // RFC 3339
+  last_failed: string;           // RFC 3339
+  reason: string;                // "max_retries_exceeded" | "permanent_error"
+}
+```
+
+## Retry Algorithm with Exponential Backoff
+
+```
+function scheduleRetry(attempt, webhook):
+    baseDelay = webhook.retry_policy.base_delay_ms     // 1000 ms default
+    maxDelay  = webhook.retry_policy.max_delay_ms      // 60000 ms default
+    multiplier = webhook.retry_policy.multiplier        // 2.0 default
+
+    delay = baseDelay * multiplier^(attempt - 1)
+    delay = min(delay, maxDelay)
+
+    // Add jitter: ±20%
+    jitter = delay * (random() * 0.4 - 0.2)  // -20% to +20%
+    delay = delay + jitter
+
+    return delay
+```
+
+Example retry schedule (default config):
+- Attempt 1: initial delivery (no delay)
+- Attempt 2: ~1000 ms (±200 ms jitter)
+- Attempt 3: ~2000 ms (±400 ms)
+- Attempt 4: ~4000 ms (±800 ms)
+- Attempt 5: ~8000 ms (±1600 ms)
+- Dead letter after attempt 5
+
+## Signature Verification
+
+Receivers MUST verify the HMAC-SHA256 signature before processing the payload:
+
+```python
+import hmac, hashlib
+
+def verify_webhook_signature(payload_body, signature_header, secret):
+    expected = hmac.new(
+        secret.encode('utf-8'),
+        payload_body,
+        hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(expected, signature_header)
+```
+
+The `X-Aidevos-Signature-256` header contains the hex-encoded HMAC-SHA256 digest of the raw request body. Receivers MUST use constant-time comparison (`hmac.compare_digest` or equivalent) to prevent timing attacks.
+
+## Idempotency Handling
+
+Webhook deliveries are idempotent by event ID. If a receiver receives the same event multiple times (due to retry), it can detect the duplicate via the `X-Aidevos-Delivery-Id` header (unique per attempt) or the `id` field in the body (same across all attempts for the same event).
+
+Receivers SHOULD track processed `event.id` values and return 200 for duplicates without processing.
+
+## Rate Limiting
+
+The webhook dispatcher applies per-endpoint rate limiting:
+
+| Limit | Scope | Default | Configurable |
+|-------|-------|---------|:-----------:|
+| Max delivery rate | Per webhook URL | 100 req/s | Yes |
+| Max concurrent deliveries | Global | 50 | Yes |
+| Max queue depth | Per webhook | 10,000 events | Yes |
+
+If a webhook URL exceeds the rate limit, deliveries are queued. If the queue exceeds max depth, new events are dropped with a `webhook.backpressure` warning event.
+
+## Failure Modes (Expanded)
+
+| Mode | Detection | Response |
+|------|-----------|----------|
+| Network timeout (>10 s) | Response not received | Retry with backoff |
+| Non-2xx status | Status code not in 2xx range | Retry; 4xx permanent errors (401, 403, 410) skip retry and dead-letter immediately |
+| DNS resolution failure | DNS NXDOMAIN | Retry; after max attempts, dead-letter |
+| TLS error | Certificate expired, host mismatch | Retry once (ephemeral errors); dead-letter if persistent |
+| Rate-limited (429) | 429 response with Retry-After | Wait `Retry-After` seconds before next attempt |
+| Secret mismatch | Recipient reports HMAC mismatch | Not detectable by sender; logged as successful delivery |
+| Queue overflow | Queue depth > 10,000 | Drop new events; emit `webhook.backpressure` |
+| Payload too large | Payload > 1 MB | Truncate with `"truncated": true` flag |
+
+## Observability / Metrics (Expanded)
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `webhook_deliveries_total` | Counter | webhook_id, status (2xx, 4xx, 5xx, error) | Delivery attempts |
+| `webhook_delivery_seconds` | Histogram | webhook_id | End-to-end delivery latency |
+| `webhook_retries_total` | Counter | webhook_id | Retry attempts |
+| `webhook_dead_letter_total` | Counter | webhook_id | Events moved to dead-letter queue |
+| `webhook_queue_depth` | Gauge | webhook_id | Pending deliveries in dispatch queue |
+| `webhook_dropped_total` | Counter | reason (backpressure, oversized) | Events dropped before delivery |
+| `webhook_active_webhooks` | Gauge | — | Currently registered webhooks |
+
+## Acceptance Criteria (Expanded)
+
+- Registering a webhook with `events: ["run.completed"]` and publishing a `run.completed` event results in an HTTPS POST to the registered URL within 500 ms.
+- A webhook delivering to a 500-ing endpoint retries with exponential backoff and dead-letters after `max_attempts` failures.
+- Rotating the secret immediately invalidates the old signature; the next delivery uses the new secret.
+- Dead-letter events can be replayed via `webhooks.replay()` and the replay delivery appears in the logs.
+- A webhook registered with `events: ["run.*"]` receives `run.completed`, `run.failed`, and `run.started`.
+- A webhook with `active: false` does not receive any deliveries.
+- The HMAC-SHA256 signature is verified by a reference receiver implementation.
+
 ## Related Documents
 
 - [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md)

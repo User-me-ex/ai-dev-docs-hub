@@ -1,41 +1,33 @@
 # Model Discovery
 
-> The pipeline that queries each provider's `/models` endpoint, normalizes the response, groups by provider, and feeds the [Nine Router](./NINE_ROUTER.md).
+> Model discovery through the Nine Router API. AI Dev OS calls `GET /v1/models` on Nine Router (`http://localhost:20128/v1/models`). Nine Router handles provider-specific discovery internally.
 
 ## Overview
 
-Model Discovery is how AI Dev OS learns what models exist. Users never hand-type model IDs; they see a live, filterable, provider-grouped catalog. Discovery runs on demand from the UI ("Refresh"), on schedule via [Job Scheduler](./JOB_SCHEDULER.md), and on provider-credential change.
+Model Discovery is how the AI Dev OS learns what models are available. The AI Dev OS Kernel calls `GET http://localhost:20128/v1/models` on [Nine Router](./NINE_ROUTER.md). Nine Router returns an OpenAI-compatible model list with provider-prefixed model IDs (e.g. `ollama/llama3.1:8b`, `kr/claude-sonnet-4.5`, `openai/gpt-4o`).
+
+Users never hand-type model IDs; they see a live, filterable, provider-grouped catalog in the Nine Router dashboard at `http://localhost:20128/dashboard`. Discovery runs automatically and on demand.
 
 ## Goals
 
-- Query each provider's `/models` (or documented equivalent) with a single normalized adapter interface.
-- Group results by provider in a stable order: OpenAI, Anthropic, Google, Mistral, Ollama, Local (llama.cpp / MLX), MCP-exposed catalogs, user-registered.
-- Deduplicate aliases (`gpt-4o` vs `gpt-4o-2024-08-06`) with a canonical id and an `aliases[]` list.
-- Emit `models.discovery` events for added/removed/changed models so subscribers (Router UI, [Cost Management](./COST_MANAGEMENT.md)) update automatically.
-- Degrade per provider: one provider failing MUST NOT block others.
+- Provide a single `GET /v1/models` endpoint that returns all models across all configured providers.
+- Return provider-prefixed model IDs in OpenAI-compatible format for tool compatibility.
+- Group results by provider in a stable order: Local → OpenAI → Anthropic → Google → OpenRouter → MCP → User-registered.
+- Deduplicate aliases with a canonical id and an `aliases[]` list.
+- Degrade per provider: one provider failing MUST NOT block discovery for others.
 
 ## Non-Goals
 
+- Provider-specific discovery — handled internally by Nine Router.
 - Model performance benchmarking — belongs in [Benchmarks](./BENCHMARKS.md).
-- Cost accounting — belongs in [Cost Management](./COST_MANAGEMENT.md); Discovery only carries advertised pricing hints.
+- Cost accounting — belongs in [Cost Management](./COST_MANAGEMENT.md).
 - Fallback/routing decisions — belong in [Model Routing Policy](./MODEL_ROUTING_POLICY.md).
 
 ## Requirements
 
-- **MUST** support the following provider endpoints out of the box:
-
-  | Provider  | Endpoint                                              | Auth                       |
-  | --------- | ----------------------------------------------------- | -------------------------- |
-  | OpenAI    | `GET https://api.openai.com/v1/models`                | `Authorization: Bearer …`  |
-  | Anthropic | `GET https://api.anthropic.com/v1/models`             | `x-api-key`, `anthropic-version` |
-  | Google    | `GET https://generativelanguage.googleapis.com/v1beta/models` | `?key=…` or ADC |
-  | Mistral   | `GET https://api.mistral.ai/v1/models`                | `Authorization: Bearer …`  |
-  | Ollama    | `GET http://localhost:11434/api/tags`                 | none (local)               |
-  | llama.cpp | `GET http://localhost:8080/v1/models` (OpenAI-compatible) | none (local)           |
-  | MLX       | filesystem scan of the model cache                    | none (local)               |
-  | MCP       | `tools/list` on connected MCP servers exposing `model` resources | per MCP server  |
-
-- **MUST** cache the last successful response per provider with a configurable TTL (default `10m`) and expose a manual **Refresh** action per provider and globally.
+- **MUST** expose a `GET /v1/models` endpoint that returns an OpenAI-compatible model list.
+- **MUST** return provider-prefixed model IDs in the format `{provider_alias}/{model_name}` (e.g. `ollama/llama3.2:3b`, `openai/gpt-4o`, `kr/claude-sonnet-4.5`).
+- **MUST** cache the last successful response per provider with a configurable TTL (default `10m`).
 - **MUST** normalize every entry into the [canonical schema](#canonical-schema).
 - **MUST** publish a `DiscoveryReport` event on `models.discovery` after every run.
 - **MUST** never store provider credentials — pull from [Secrets Management](./SECRETS_MANAGEMENT.md) at call time.

@@ -1,16 +1,18 @@
 # Anthropic Integration
 
-> Provider adapter implementation guide for the Anthropic API. This document extends [Model Providers](./MODEL_PROVIDERS.md) with Anthropic-specific message formatting, tool use, extended thinking, streaming event handling, and capabilities mapping. Implementations MUST satisfy every MUST clause below.
+> Anthropic provider configuration for Nine Router. All model access flows through Nine Router at `http://localhost:20128/v1`. This document describes how Anthropic is configured as a routing target within Nine Router. See [Nine Router Integration](./NINE_ROUTER_INTEGRATION.md).
 
 ## Overview
 
-The Anthropic adapter connects the Nine Router to Anthropic's Messages API. Unlike OpenAI's flat message format, Anthropic uses structured content blocks and a distinct streaming event protocol. The adapter normalizes these to the standard `ChatRequest` / `ChatChunk` interfaces while preserving Anthropic-specific features.
+This document describes how to register and configure Anthropic as a provider within the [Nine Router](./NINE_ROUTER.md) provider registry. Once configured, AI Dev OS accesses Anthropic models through Nine Router — never directly. Nine Router handles format translation between OpenAI-compatible requests and Anthropic's Messages API format automatically.
+
+The Anthropic adapter inside Nine Router connects to Anthropic's Messages API. Unlike OpenAI's flat message format, Anthropic uses structured content blocks and a distinct streaming event protocol. The adapter normalizes these to the standard `ChatRequest` / `ChatChunk` interfaces while preserving Anthropic-specific features.
 
 ## Endpoint Configuration
 
 ```
 base_url: https://api.anthropic.com/v1
-auth:     x-api-key: ${ANTHROPIC_API_KEY}
+auth:     x-api-key: ${ANTHROPIC_API_KEY}   # Managed in Nine Router Secrets
           anthropic-version: 2023-06-01
 ```
 

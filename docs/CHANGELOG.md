@@ -200,6 +200,96 @@ Pre-release versions are listed as `[MAJOR.MINOR.PATCH-rc.N]` and are excluded f
 5. Entries SHOULD link to the relevant documentation for new or changed features.
 6. The changelog is maintained by hand — automated generation tools (e.g., `git log` scraping) are not used. This ensures each entry is written for human readers.
 
+## Deprecation Notices
+
+| Version | Deprecated Feature | Replacement | Removal Version |
+|---------|-------------------|-------------|-----------------|
+| 0.7.0 | `aidevos remote` command | `aidevos server` subcommands | 1.0.0 |
+| 0.6.0 | Single-agent mode (direct) | Multi-agent pipeline | 1.0.0 |
+| 0.5.0 | Legacy prompt format (v0) | v1 prompt front matter | 0.7.0 |
+| 0.4.0 | `AIDEVOS_LEGACY_DB_PATH` env var | `AIDEVOS_DB_PATH` | 0.6.0 |
+
+## Upgrade Instructions Per Version
+
+### Upgrading from 0.1.0 to 0.2.0
+
+1. Backup your database: `aidevos db backup --output backup.db`
+2. Install the new binary: `brew upgrade aidevos/tap/aidevos` or download from GitHub
+3. Run `aidevos doctor` — database migration is automatic
+4. Verify: `aidevos --version` should report `0.2.0`
+
+### Upgrading from 0.2.0 to 0.3.0
+
+1. Backup: `aidevos db backup --output backup.db`
+2. Install new binary
+3. Run `aidevos doctor` — migration applies new `memory` table
+4. The vector index is rebuilt on first query (may take a few minutes)
+
+### Upgrading from 0.3.0 to 0.4.0
+
+1. Backup
+2. Install new binary
+3. Run `aidevos init --upgrade` — migrates config format and database
+4. Verify group system is functional: `aidevos groups list`
+
+### Upgrading from 0.4.0 to 0.5.0
+
+1. Backup
+2. Install new binary
+3. The knowledge system migration runs on first `aidevos memory query`
+4. Prompt files are automatically migrated to v1 format
+
+### Upgrading from 0.5.0 to 0.6.0
+
+1. Backup
+2. Install new binary
+3. Guardian rules are loaded from `~/.aidevos/rules/` — existing rules continue to work
+4. Merge Manager is enabled by default; no migration needed
+
+### Upgrading from 0.6.0 to 0.7.0
+
+1. Backup
+2. Install new binary
+3. Plugin SDK migration: existing plugins need manifest update (see PLUGIN_MIGRATION_GUIDE)
+4. Voice system is opt-in; requires no migration
+
+### Upgrading from 0.7.0 to 1.0.0
+
+1. **Read the full Migration Guide**: `docs/MIGRATION_GUIDE.md`
+2. Backup ALL data: `aidevos db backup --full`
+3. Install new binary
+4. Run `aidevos init --migrate-1.0` — comprehensive migration
+5. Verify with `aidevos doctor --full`
+6. Test with a non-critical goal first
+
+## Breaking Changes Callout
+
+### 1.0.0 Breaking Changes
+
+- **CLI**: `aidevos remote` removed; use `aidevos server` subcommands
+- **Config**: `[remote]` section removed; use `[backend]` with `mode = "server"`
+- **API**: `/v0/` endpoints removed; migrate to `/v1/`
+- **Database**: Schema version 10 required; migration from v5+ supported
+- **Prompts**: v0 prompt format no longer supported; all prompts must use v1 front matter
+
+### Pre-1.0 Breaking Changes
+
+- 0.7.0: Plugin manifest format changed; plugins must be re-registered
+- 0.5.0: Prompt front matter format changed; auto-migration provided
+- 0.4.0: Config file format changed; `aidevos init --upgrade` handles migration
+
+## Changelog Maintenance Policy (Expanded)
+
+1. Every PR that adds, changes, or removes user-facing behavior MUST include a corresponding changelog entry.
+2. Entries are added under the `[Unreleased]` section during development.
+3. At release time, `[Unreleased]` is renamed to the version number, a new `[Unreleased]` section is created, and the release date is added.
+4. Entries SHOULD reference relevant issue or PR numbers in parentheses.
+5. Entries SHOULD link to the relevant documentation for new or changed features.
+6. The changelog is maintained by hand — automated generation tools (e.g., `git log` scraping) are not used. This ensures each entry is written for human readers.
+7. Deprecation notices are added in the same release the deprecation is introduced.
+8. Breaking changes are called out in a dedicated section with migration instructions.
+9. Each release entry includes a `Migration Notes` section if schema or config changes are required.
+
 ## Related Documents
 
 - [Versioning](./VERSIONING.md)

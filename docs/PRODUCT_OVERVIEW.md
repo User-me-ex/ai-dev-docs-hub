@@ -6,7 +6,7 @@
 
 AI Dev OS is an open-source development operating system that orchestrates multiple AI agents to solve complex software engineering tasks. Unlike single-model coding assistants (Cursor, Copilot) or end-to-end coding agents (Devin, SWE-agent), AI Dev OS is a **platform for running coordinated multi-agent systems** where specialised agents — the Kernel, Planner, Router, Researcher, Builder, Critic, Merger, Guardian, and Voice — collaborate through a deterministic loop to produce production-quality code.
 
-The system is **local-first**, **model-agnostic**, and **observability-built-in**. Everything flows through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md); no hidden state exists. Every decision, every event, every artifact is recorded, traceable, and auditable.
+The system is **local-first** (all state on your machine, cloud optional via Nine Router), **model-agnostic**, and **observability-built-in**. Everything flows through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md); no hidden state exists. Every decision, every event, every artifact is recorded, traceable, and auditable.
 
 ## What AI Dev OS Solves
 
@@ -18,7 +18,7 @@ The system is **local-first**, **model-agnostic**, and **observability-built-in*
 | **Model selection complexity** | The Nine Router + Model Routing Policy pick the best model per role |
 | **Quality and safety** | The Critic reviews all output; the Architecture Guardian enforces invariants before delivery |
 | **Observability and debugging** | Every event is published to the SCE; traces, metrics, and logs follow OpenTelemetry |
-| **Multi-provider flexibility** | Model Providers abstraction supports OpenAI, Anthropic, Google, Mistral, Ollama, llama.cpp, MCP |
+| **Multi-provider flexibility** | Nine Router abstracts all model providers — local (Ollama, llama.cpp) and cloud (via Nine Router config) |
 | **Vendor lock-in avoidance** | Model-agnostic policy means you can swap models per role without changing workflow |
 
 ## Key Features
@@ -74,13 +74,14 @@ The system is **local-first**, **model-agnostic**, and **observability-built-in*
 
 ## Architecture Philosophy
 
-1. **Local-first**: The system runs entirely on your machine. Cloud models are optional. All state is local unless explicitly synced.
-2. **Spec-before-code**: Every subsystem is documented before it is implemented. Documentation is normative — it defines the contracts AI agents reason about.
-3. **Observability-built-in**: Metrics, traces, and logs are not retrofitted; they are emitted by every subsystem at every stage. The SCE is the single source of truth.
-4. **No hidden state**: Every mutation flows through the SCE. There is no in-memory state that cannot be reconstructed from events.
-5. **Replaceable subsystems**: Every subsystem has a defined interface. You can swap the Planner, change the Router, or replace the Guardian — as long as the interface contract is satisfied.
-6. **Model-agnostic**: No model-specific optimisations in core code. Model-specific behaviour lives in Model Provider adapters.
-7. **Versioned everything**: Policy documents, plans, graphs, and knowledge are versioned. Immutable snapshots enable reproducibility.
+1. **Local-first**: The system runs entirely on your machine. Cloud models are optional and configured via Nine Router. All state is local unless explicitly synced.
+2. **Nine Router as model gateway**: All model requests go through Nine Router (localhost:20128/v1). No direct provider API calls. Local providers are the default; cloud providers are configured inside Nine Router.
+3. **Spec-before-code**: Every subsystem is documented before it is implemented. Documentation is normative — it defines the contracts AI agents reason about.
+4. **Observability-built-in**: Metrics, traces, and logs are not retrofitted; they are emitted by every subsystem at every stage. The SCE is the single source of truth.
+5. **No hidden state**: Every mutation flows through the SCE. There is no in-memory state that cannot be reconstructed from events.
+6. **Replaceable subsystems**: Every subsystem has a defined interface. You can swap the Planner, change the Router, or replace the Guardian — as long as the interface contract is satisfied.
+7. **Model-agnostic**: No model-specific optimisations in core code. Model-specific behaviour lives in Model Provider adapters.
+8. **Versioned everything**: Policy documents, plans, graphs, and knowledge are versioned. Immutable snapshots enable reproducibility.
 
 ## Requirements
 
@@ -100,7 +101,7 @@ User runs: aidevos run "Add input validation to the login form"
 
 1. Intake:    Kernel receives goal, validates format, enriches with KB context
 2. Plan:      Planning Engine decomposes into [Researcher→Builder→Critic→Merger]
-3. Route:     Nine Router binds Builder → gpt-4o, Critic → claude-opus-4, etc.
+3. Route:     Nine Router binds models to roles (local by default, cloud optional)
 4. Execute:   Workers run tasks in parallel where possible
 5. Critique:  Critic reviews each output; flags missing edge cases
 6. Replan:    Kernel re-plans the rejected branch (max 5 attempts)
@@ -136,14 +137,14 @@ flowchart TB
     WORKERS <--> PMEM
 
     subgraph "Model Layer"
-      MPR[Model Providers]
+      NR[Nine Router\nlocalhost:20128]
       LOCAL[Local: Ollama, llama.cpp, MLX]
-      CLOUD[Cloud: OpenAI, Anthropic, Google, Mistral]
+      CLOUD[Cloud: optional via Nine Router]
     end
 
-    ROUTER --> MPR
-    MPR --> LOCAL
-    MPR --> CLOUD
+    ROUTER --> NR
+    NR --> LOCAL
+    NR -->|if configured| CLOUD
   end
 ```
 
@@ -151,9 +152,9 @@ flowchart TB
 
 | Mode | Description | Configuration |
 |------|-------------|---------------|
-| **Local only** | All models run locally via Ollama or llama.cpp | `AIDEVOS_MODELS=local` |
-| **Hybrid** | Cheap roles (Router, Guardian) use local; complex roles use cloud | Per-role policy in Nine Router |
-| **Cloud only** | All models use cloud providers | Provider API keys configured |
+| **Local only** | All models run locally via Ollama or llama.cpp | Default — no config needed |
+| **Hybrid** | Cheap roles (Router, Guardian) use local; complex roles use cloud via Nine Router | Per-role policy in Nine Router |
+| **Cloud only** | All models use cloud providers configured in Nine Router | Provider keys in Nine Router dashboard |
 | **Team server** | Shared AI Dev OS instance on a LAN server | Multi-process deployment |
 | **CI/CD** | Ephemeral runs in CI pipeline | Kubernetes / Docker |
 
@@ -169,10 +170,11 @@ flowchart TB
 
 | Mode | Detection | Response |
 |------|-----------|----------|
-| No model available for a role | `policy.choose()` raises | Surface available models; suggest configuring a provider |
+| No model available for a role | `policy.choose()` raises | Surface available models; suggest configuring a provider in Nine Router |
 | Cycle in task graph | `plan.validate()` detects | Reject plan; surface cycle edges to operator |
 | Critic rejection loop | Replan count > 5 | Mark run `failed`; escalate with full feedback history |
-| Provider outage | Worker gets HTTP 503 | Fall back to next model in chain; emit alert |
+| Nine Router unavailable | Worker gets connection refused | Retry with backoff; surface setup instructions |
+| Provider outage (via Nine Router) | Worker gets HTTP 503 | Nine Router falls back to next model in chain; emit alert |
 | KB write conflict | Two agents write to same KB key | Last-writer-wins with audit trail; emit warning |
 | Guardian storm | ≥3 vetoes in 10s | Freeze non-critical routes; alert operator |
 
