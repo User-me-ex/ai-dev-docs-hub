@@ -1,84 +1,184 @@
 # Telemetry
 
+> Privacy-preserving, opt-in usage telemetry that helps the AI Dev OS team understand feature adoption, performance characteristics, and failure patterns — without collecting PII, code content, or model inputs/outputs. This document is normative — implementations MUST satisfy every MUST clause below.
+
 ## Overview
 
-Telemetry in AI Dev OS is **opt-in only** and **disabled by default**. No data is collected or transmitted unless the user explicitly enables telemetry.
+Telemetry is the collection of anonymised, aggregated usage data that the AI Dev OS team uses to prioritise features, identify performance regressions, and fix the most common failure modes. Telemetry is **strictly opt-in** — no data is collected without explicit user consent, and the user can disable it at any time with zero loss of functionality.
 
-Telemetry helps the core team understand usage patterns, prioritize features, and fix bugs. It is designed with privacy as a first principle — collected data is minimal, anonymized, and never includes user content.
+Telemetry is distinct from [Observability](./OBSERVABILITY.md). Observability serves the operator of the local instance. Telemetry serves the product team. Observability is always on; telemetry is off by default.
 
----
+## Goals
 
-## What Is Collected
+- Collect only what is necessary to improve the product: feature adoption counts, error rates, runtime environment, and performance distributions.
+- Never collect: code content, model prompts/responses, file names, project names, agent conversation logs, or any PII.
+- All telemetry is anonymised before transmission. No user account, IP address, or machine fingerprint is persisted server-side.
+- The user must explicitly opt in (first-run wizard or `aidevos telemetry enable`). Opt-out must be honoured immediately and permanently.
+- Telemetry is transmitted over HTTPS to a first-party collector. No third-party analytics SDK is embedded.
 
-When enabled, the following anonymized data points are collected:
+## Non-Goals
 
-| Data Point | Description |
-|---|---|
-| OS version | e.g. `Windows 10.0.19045`, `macOS 14.5`, `Linux 6.8` |
-| AI Dev OS version | e.g. `0.2.0` |
-| Command usage counts | e.g. `{ run: 42, config: 15, eval: 7 }` |
-| Error types | Aggregated error categories, **not** stack traces or messages |
-| Model provider usage | e.g. `{ anthropic: 120, openai: 45 }` — no model names or API keys |
-| Session duration | Uptime in seconds (rounded to nearest minute) |
+- User tracking or attribution — telemetry is anonymous by design.
+- Feature gate decisions — telemetry informs but does not control feature availability.
+- Error monitoring for the local operator — use [Observability](./OBSERVABILITY.md) for that.
+- Implementation code — this repo is documentation-only ([AI Coding Rules](./AI_CODING_RULES.md)).
 
----
+## Collected Data
 
-## What Is NOT Collected
+### Environment (collected once per installation)
 
-- Code content, file contents, or project structure
-- Prompts sent to or responses from AI models
-- Memory contents or knowledge graph data
-- Personal information (name, email, IP address — IPs are discarded at ingestion)
-- System environment variables
-- Network configuration or hostnames
+| Field | Example | PII? | Purpose |
+|-------|---------|------|---------|
+| `os` | `linux`, `darwin`, `windows` | No | Platform adoption tracking |
+| `os_version` | `22.04`, `14.5`, `10.0.19045` | No | Compatibility analysis |
+| `architecture` | `x86_64`, `arm64` | No | Architecture adoption |
+| `aidevos_version` | `0.1.0` | No | Version distribution |
+| `runtime` | `node v20.11.0`, `python 3.12` | No | Runtime version tracking |
+| `install_method` | `binary`, `npm`, `docker`, `homebrew` | No | Distribution channel effectiveness |
+| `locale` | `en-US` (language + region only) | No | Regional adoption |
+| `process_id` | Opaque UUID, generated at first run, stored in config | No | Deduplication without tracking |
 
----
+### Usage Events (submitted on each occurrence)
 
-## How to Enable / Disable
+| Event | Fields | Frequency |
+|-------|--------|-----------|
+| `run.completed` | `{success: bool, duration_ms: int, stage_count: int, model_count: int}` | Per run |
+| `run.failed` | `{failure_reason: string, stage: string}` | Per failure |
+| `model.discovery` | `{provider_count: int, models_found: int, duration_ms: int}` | Per refresh |
+| `feature.used` | `{feature: string}` | Per unique feature per session |
+| `error.occurred` | `{error_code: string, subsystem: string}` | Per 5-minute bucket (deduplicated) |
+| `guardian.veto` | `{rule_id: string, severity: string}` | Per veto |
+| `plugin.loaded` | `{plugin_count: int}` | Per session |
+| `telemetry.status` | `{enabled: bool}` | On change |
 
-### Configuration File
+### NOT Collected (explicitly excluded)
 
-```toml
-# ~/.config/aidevos/config.toml
+- Code content, file contents, project names, repository URLs
+- Model prompts, responses, or any agent conversation data
+- File paths, environment variable values, secrets, credentials
+- IP addresses (beyond country-level geo from the collector's side)
+- Machine hostname, MAC address, hardware serials, exact CPU/GPU model (beyond "arm64" / "x86_64")
+- Browser cookies, local storage contents
+- Any PII (name, email, username, organisation name)
 
-[telemetry]
-enabled = false  # set to true to opt in
+## Architecture
+
+```mermaid
+flowchart LR
+  subgraph User Machine
+    AIDEVOS[AIDev OS\nlocal instance]
+    CONFIG[~/.aidevos/config.toml\ntelemetry.enabled = false]
+    EVENTS[(Events buffer\nmax 1000, rotated)]
+  end
+
+  CONFIG -->|reads| AIDEVOS
+  AIDEVOS -->|opt-in check| CONFIG
+  AIDEVOS -->|batch events| EVENTS
+  EVENTS -->|every 5 min\nHTTP POST| COLL[Telemetry Collector\nfirst-party HTTPS]
+
+  subgraph Cloud Collector
+    COLL --> INGEST[Ingest API]
+    INGEST --> VALIDATE[Validate & anonymize]
+    VALIDATE --> AGG[TimescaleDB / ClickHouse]
+    AGG --> DASH[Dashboard]
+  end
 ```
 
-### Environment Variable
+## Opt-In Flow
 
-```bash
-# Overrides config.toml
-export AIDEVOS_TELEMETRY_ENABLED=true
+```
+1. First run: "Help improve AI Dev OS? Send anonymous usage data? [Y/n]"
+2. User answers Y → telemetry.enabled = true
+                   → environment event sent immediately
+3. User answers n → telemetry.enabled = false
+                   → nothing sent, no further prompts
+4. User runs: aidevos telemetry enable
+                   → telemetry.enabled = true
+                   → environment event sent
+5. User runs: aidevos telemetry disable
+                   → telemetry.enabled = false
+                   → pending buffer cleared, no further sends
+6. User runs: aidevos telemetry status
+                   → prints "Telemetry: enabled" or "Telemetry: disabled"
 ```
 
-Setting `AIDEVOS_TELEMETRY_ENABLED=false` explicitly disables telemetry even if the config file says `true`.
+## Data Flow
 
----
+```
+1. Every 5 minutes (configurable), the telemetry background job:
+   a. Reads telemetry.enabled from config
+   b. If disabled: discards buffer, sleeps
+   c. If enabled: serialises buffer as JSON, sends POST to collector
+2. On success: clear buffer
+3. On failure: keep buffer, retry at next interval (exponential backoff: 5m, 10m, 20m, max 1h)
+4. Buffer is capped at 1000 events. Oldest events are dropped when full.
+```
 
-## Data Transmission
+## Interfaces
 
-Telemetry data is buffered locally and uploaded in periodic batch requests to `telemetry.aidevos.dev/v1/ping`. Batch size: up to 100 events. Frequency: every 60 minutes while the daemon is running.
+```
+telemetry.enable()
+telemetry.disable()
+telemetry.status() → { enabled: bool, events_queued: int, last_send: timestamp? }
+telemetry.event(name: string, fields?: { string: value })
+telemetry.flush()  // force immediate send (blocking)
+```
 
-Transmission uses HTTPS with TLS 1.3. No data is sent to third-party services — the telemetry endpoint is self-hosted by the AI Dev OS project.
+## Configuration
 
-If the endpoint is unreachable (network offline, DNS failure), events are queued and retried. The queue caps at 1000 events; older events are dropped (FIFO).
+```
+[AIDEVOS_TELEMETRY]
+enabled = false                           # opt-in
+collector_url = "https://telemetry.aidevos.dev/v1/events"
+buffer_size = 1000                        # max queued events
+send_interval_sec = 300                   # 5 minutes
+```
 
----
+## Failure Modes
+
+| Mode | Detection | Response |
+|------|-----------|----------|
+| Collector unreachable | HTTP timeout | Buffer events; retry next interval; no user-visible effect |
+| Opt-in config corrupted | Parse error | Treat as disabled; log WARN; reset to default on next config write |
+| Buffer overflow | >1000 events | Drop oldest; increment `aidevos_telemetry_dropped_total` counter |
+| Network proxy required | HTTP 407 | Log WARN with proxy config hint; do not bypass proxy automatically |
+| GDPR consent withdrawal | User calls disable | Clear buffer immediately; stop all sends; persist config change |
+
+## Performance Budget
+
+| Operation | p99 Target |
+|-----------|------------|
+| `event()` call (enabled) | < 50 µs |
+| `event()` call (disabled) | < 1 µs (early return after config check) |
+| Batch send (100 events, good network) | < 2 s |
+| Buffer write (disk) | < 1 ms |
 
 ## Privacy Guarantees
 
-1. Telemetry is opt-in. No data leaves the machine without user consent.
-2. All collected data is anonymized at the source — no PII is ever transmitted.
-3. Telemetry payloads are encrypted in transit (TLS 1.3).
-4. Data on the telemetry server is retained for 90 days, then aggregated and anonymized permanently.
-5. Users can delete their telemetry data by contacting the project team with their installation ID.
-6. The telemetry module is open source — inspect it at `src/telemetry/`.
+1. **No PII**: The collector never receives names, emails, code, or model content.
+2. **No tracking**: The `process_id` is a random UUID generated at install time. It is not linked to any account, email, or machine identity. The collector cannot correlate events across different installations.
+3. **No third party**: The collector is first-party infrastructure. No Google Analytics, Sentry, or other third-party SDK is embedded.
+4. **Transparency**: Every field collected is documented in this spec. The user can inspect the full pending buffer via `aidevos telemetry status --verbose`.
+5. **Data retention**: Aggregated telemetry is retained for 24 months. Raw events are purged after 90 days.
 
----
+## Compliance
+
+- **GDPR**: Telemetry is based on legitimate interest (product improvement) with explicit opt-in. The user can withdraw consent at any time.
+- **CCPA**: No personal information is collected. The `process_id` is not a personal identifier.
+- **SOC 2**: Telemetry is not part of the production data path. It is an outbound-only, best-effort data stream with no impact on system reliability.
+
+## Acceptance Criteria
+
+- Fresh install: first-run prompt appears exactly once. Whether the user accepts or declines, the prompt does not reappear.
+- `aidevos telemetry disable` stops all data transmission within 1 second and clears the buffer.
+- A network capture (Wireshark / tcpdump) during telemetry-enabled operation shows HTTPS POSTs only to the configured collector URL. No other network destinations are contacted.
+- The collector receives a `run.completed` event with `{success: true, duration_ms: 1234, stage_count: 8, model_count: 1}` format. No file paths, no model prompts.
+- Setting `enabled = false` in config and restarting the process produces zero outbound HTTPS connections from the telemetry subsystem.
 
 ## Related Documents
 
-- [Privacy Policy](./PRIVACY.md)
-- [Configuration Reference](./CONFIGURATION.md)
-- [Environment Variables](./ENV_VARS.md)
+- [Privacy](./PRIVACY.md) — privacy policy and data handling
+- [Compliance](./COMPLIANCE.md) — regulatory compliance framework
+- [Security Model](./SECURITY_MODEL.md) — data protection guarantees
+- [Observability](./OBSERVABILITY.md) — operational observability (distinct from product telemetry)
+- [System Overview](./SYSTEM_OVERVIEW.md)

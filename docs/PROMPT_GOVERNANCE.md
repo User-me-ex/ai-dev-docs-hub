@@ -1,87 +1,212 @@
 # Prompt Governance
 
-> Specification for the review, versioning, and rollout process for prompts. This document is normative — implementations MUST satisfy every MUST clause below.
+> Version-controlled review, approval, and rollout process for every prompt in AI Dev OS — ensuring prompt changes are auditable, reversible, and measurable. This document is normative — implementations MUST satisfy every MUST clause below.
 
 ## Overview
 
-Prompt Governance is a first-class subsystem of the AI Development Operating System (AI Dev OS). It participates in the Kernel's intake → plan → route → execute → critique → merge → guard → deliver loop and communicates exclusively through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md). This document defines its purpose, contracts, invariants, and failure modes so that AI agents can reason about it without inspecting any implementation.
+Prompt Governance is the quality-control layer for prompt engineering in AI Dev OS. Every prompt — Master, Kernel, Planner, Router, Critic, Researcher, Agent — is a versioned, diffable, reviewable document. Changes follow a defined workflow: propose → review → approve → rollout → monitor → rollback-on-regression.
+
+The governance process applies to all prompts under `prompts/` and any prompt template referenced by a subsystem spec. It does **not** apply to user-supplied prompts in the goal text or to dynamic prompt fragments generated at runtime by the Planning Engine.
 
 ## Goals
 
-- Every prompt change is reviewed and diffed like code.
-- A/B testing hooks with automatic rollback on regression.
+- Every prompt change is reviewed and diffed like code (PR + approval + CI).
+- A/B testing hooks allow operators to compare prompt versions against acceptance criteria before full rollout.
+- Automatic rollback on regression: if a key metric degrades after a prompt change, the previous prompt version is re-applied within one evaluation interval.
+- Complete audit trail: who changed what prompt, when, why, and what the effect was.
+- Prompt changes are decoupled from code releases — prompts can be updated without restarting the server.
 
 ## Non-Goals
 
-- Implementation code — this repository is documentation-only (see [AI Coding Rules](./AI_CODING_RULES.md)).
-- Vendor-specific tuning beyond what [Model Providers](./MODEL_PROVIDERS.md) allows.
-- Duplicating contracts that belong to another subsystem; link instead.
+- Prompt generation or optimisation — use the Research Engine and Eval Harness for that.
+- User goal content — user goals are not subject to this governance.
+- Dynamic runtime prompt assembly — that is the responsibility of the Agent Lifecycle and Context Window Management.
+- Implementation code — this repo is documentation-only ([AI Coding Rules](./AI_CODING_RULES.md)).
 
-## Requirements
+## Prompt Registry
 
-- **MUST** be consumable by both humans and AI agents.
-- **MUST** publish every state change to the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md).
-- **MUST** pass every rule enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md).
-- **MUST** be observable through the metrics defined in [Observability](./OBSERVABILITY.md).
-- **SHOULD** degrade gracefully rather than fail hard.
-- **MAY** be extended via the [Plugin SDK](./PLUGIN_SDK.md) when the extension point is declared here.
+All prompts under governance are registered in a PromptRegistry with the following schema:
+
+```yaml
+prompt_id: "master/v0"
+path: "prompts/MASTER_PROMPT.md"
+version: "0.1.0"
+status: "active"          # draft | active | deprecated | rolled_back
+checksum: "sha256:abc123"
+approved_by: "reviewer@"
+approved_at: "2026-07-22T12:00:00Z"
+rollout_percentage: 100   # 0-100; used for staged rollout
+```
+
+The registry is stored in `~/.aidevos/prompt-registry.yaml` and is loaded at Kernel startup. Prompts are read from disk at every evaluation (not cached in memory beyond the current TTL) so that a file-save takes effect without a restart.
+
+## Versioning Scheme
+
+Prompts follow semantic versioning:
+
+```
+MAJOR.MINOR.PATCH
+```
+
+- **MAJOR**: Breaking change to the prompt's output contract (different response format, removed section, changed role definition). Resets A/B test history.
+- **MINOR**: Non-breaking addition (new section, new example, clarified instruction). Compatible with existing evaluations.
+- **PATCH**: Typo fix, formatting, minor rewording. No behavioural change expected.
+
+Version numbers are stored in the YAML front matter of each prompt file:
+
+```yaml
+---
+prompt_id: master/v0
+version: 0.1.0
+description: "Master system prompt v0"
+author: "kernel-team"
+last_reviewed: "2026-07-22"
+---
+```
+
+## Change Workflow
+
+```mermaid
+flowchart LR
+  AUTHOR[Author edits prompt] --> BRANCH[Create git branch]
+  BRANCH --> CI[CI runs Eval Harness\non new prompt version]
+  CI -->|all tests pass| REVIEW[Peer review]
+  CI -->|test failure| BRANCH
+
+  REVIEW -->|approve| STAGE[Staged rollout\n5% → 25% → 100%]
+  REVIEW -->|changes requested| BRANCH
+
+  STAGE --> MONITOR[Monitor metrics\nfor 1 hour]
+  MONITOR -->|metrics green| ACTIVE[Full rollout\nversion marked active]
+  MONITOR -->|regression| ROLLBACK[Auto rollback\nto previous stable version]
+```
+
+### Stage Gates
+
+| Gate | Check | Who |
+|------|-------|-----|
+| **Format** | YAML front matter valid? Version bumped? Required sections present? | CI (automated) |
+| **Eval** | Does the new prompt pass the Eval Harness on the default prompt suite? | CI (automated) |
+| **Diff** | Is the diff human-reviewable (no massive rewrites)? | Reviewer |
+| **Impact** | Does the change affect the prompt contract (MAJOR version)? | Reviewer |
+| **Rollout** | Is the rollout plan documented in the PR description? | Author |
+
+## A/B Testing
+
+Prompt changes can be rolled out incrementally using a percentage-based routing:
+
+```
+prompt.resolve("master") → {
+  version: "0.2.0-rc.1"   # 5% of requests
+  version: "0.1.0"        # 95% of requests
+}
+```
+
+The A/B split is deterministic per `correlation_id` so that a single run always sees a consistent prompt version across all its agent invocations.
+
+### Metrics Compared
+
+| Metric | Degradation threshold | Action |
+|--------|----------------------|--------|
+| Eval Harness pass rate | +5% fail rate | Rollback |
+| Run success rate | +2% fail rate | Rollback |
+| Average tokens per completion | +20% | Warn (cost impact) |
+| Guardian veto rate | +1% | Rollback |
+| User feedback score (thumbs down) | +5% | Rollback |
+
+## Rollback Procedure
+
+When a regression is detected during staged rollout:
+
+1. The Governance subsystem publishes `prompt.rollback` on the SCE.
+2. The PromptRegistry switches to the previous stable version for all new requests.
+3. The previous version's checksum is verified.
+4. In-flight runs using the RC version continue to completion; new runs use the stable version.
+5. A notification is sent to the prompt author and the Kernel team.
+
+Automatic rollback is the default. Operators can override by setting `rollout.auto_rollback = false` in the A/B test config and handling rollback manually.
 
 ## Architecture
 
 ```mermaid
-flowchart LR
-  IN([Input]) --> SUB[Prompt Governance]
-  SUB --> CTX[(Shared Context Engine)]
-  SUB --> GUARD{Architecture Guardian}
-  GUARD -->|ok| OUT([Output])
-  GUARD -->|veto| SUB
-```
+flowchart TB
+  subgraph Authoring
+    EDIT[Author edits prompt file]
+    PR[Creates PR + prompt change doc]
+  end
 
-The subsystem is stateless at the process boundary; all durable state lives in the [Persistent Memory](./PERSISTENT_MEMORY.md) tier and is projected on demand.
+  EDIT --> PR
+  PR --> CI[CI: lint, eval, diff]
+  CI --> APPROVE[Approval gate]
+
+  APPROVE --> REG[PromptRegistry updated]
+  REG --> ROUTER[Prompt Router\nresolves(role, version?)]
+  ROUTER --> KERNEL[Main AI Kernel\ninjects prompt into context]
+
+  subgraph Runtime
+    AGENT[Agent receives prompt]
+    AGENT --> RESULT[Result + metrics]
+    RESULT --> EVAL_MON[Eval Harness + Metrics Monitor]
+  end
+
+  EVAL_MON -->|regression| ROLLBACK[Auto-rollback]
+  ROLLBACK --> REG
+```
 
 ## Interfaces
 
-- `prompts.propose(patch)`, `prompts.publish(version)`, `prompts.rollback(version)`.
+```
+governance.prompts() → PromptMeta[]                    # all registered prompts
+governance.get(prompt_id, version?) → string           # resolve prompt text
+governance.diff(prompt_id, from_ver, to_ver) → Diff    # structured diff
+governance.rollout(prompt_id, version, percentage)     # staged rollout
+governance.rollback(prompt_id, reason?)                 # manual rollback
+governance.status(prompt_id) → RolloutStatus           # current rollout state
+governance.history(prompt_id) → ChangeEvent[]          # audit trail
+```
 
-All interfaces follow the envelope defined in [Agent Communication](./AGENT_COMMUNICATION.md) and the error contract defined in [API Spec](./API_SPEC.md).
+## Configuration
 
-## Data Model
-
-- `PromptVersion { id, prompt_id, hash, author, notes, metrics }`.
-
-Retention and encryption rules are inherited from [Data Retention](./DATA_RETENTION.md) and [Encryption](./ENCRYPTION.md).
+```
+[AIDEVOS_PROMPT_GOVERNANCE]
+registry_path = "~/.aidevos/prompt-registry.yaml"
+auto_rollback = true
+rollout_steps = [5, 25, 50, 100]            # percentages for staged rollout
+monitor_duration_min = 60                     # how long to monitor before progressing
+rollback_alert_channel = "slack:#prompts"     # notification channel
+```
 
 ## Failure Modes
 
-- Metric regression > threshold → auto-rollback.
-
-Every failure emits a structured event on the Shared Context Engine and is recorded in the [Audit Log](./AUDIT_LOG.md).
+| Mode | Detection | Response |
+|------|-----------|----------|
+| Registry file corrupt | YAML parse error | Rebuild from last known-good git state; log CRITICAL |
+| Prompt file missing | File not found at resolve time | Use last cached version; log ERROR; escalate |
+| Eval Harness timeout | > 30s per evaluation | Skip eval gate; require manual approval with justification |
+| Staged rollout stuck | Percentage unchanged > 24h | Notify owner: "Rollout stalled at <percentage>%" |
+| Rollback loop | ≥ 3 rollbacks within 1 hour | Lock prompt to stable version; require core-team manual override |
+| In-flight run uses wrong version | Resolved version changes mid-run | Snapshot semantics: version is pinned at run start; mid-run change does not affect in-flight agents |
 
 ## Security Considerations
 
-- Trust boundary: crosses only through signed envelopes (see [Security Model](./SECURITY_MODEL.md)).
-- Secrets are read from [Secrets Management](./SECRETS_MANAGEMENT.md); never inlined.
-- All external calls go through [Model Providers](./MODEL_PROVIDERS.md) or the [Plugin SDK](./PLUGIN_SDK.md) — no ad-hoc network access.
-
-## Observability
-
-- Metrics, traces, and logs conform to [Observability](./OBSERVABILITY.md), [Tracing](./TRACING.md), and [Logging](./LOGGING.md).
-- Every run carries a `correlation_id` propagated from the Kernel.
+- The PromptRegistry is a local file. In multi-tenant deployments, it SHOULD be readable only by the Kernel process.
+- Prompt text can contain injection-surface. All prompt content is validated by the Eval Harness to reject prompt-injection vectors before approval.
+- The rollback mechanism cannot be triggered by a non-admin agent. Only the Governance subsystem or an operator can initiate a rollback.
+- ACK from the Governance subsystem is required before the Kernel switches to a new prompt version for new runs.
 
 ## Acceptance Criteria
 
-- The contracts above are testable via the [Eval Harness](./EVAL_HARNESS.md).
-- A change to this document requires a matching update to any dependent doc listed in *Related Documents*.
-
-## Open Questions
-
-- _Track open questions as ADRs under [templates/ADR](../templates/ADR.md)._
+- Changing a single word in `prompts/SYSTEM_PROMPT.md`, committing, and pushing triggers a CI evaluation that runs the full default prompt suite before the change can be deployed.
+- Setting `rollout_percentage = 5` for a new prompt version results in exactly 5% of new runs using the new version (measurable over 200 runs).
+- Introducing a intentional regression in a prompt (e.g. remove a safety instruction) causes the Eval Harness to fail and the auto-rollback to trigger within 1 hour.
+- The SCE receives a `prompt.rollback` event with `{prompt_id, from_version, to_version, reason}` when a rollback occurs.
+- `governance.history("master")` returns a chronologically ordered list of every change with version, author, and timestamp.
 
 ## Related Documents
 
-- [Master Prompt](./MASTER_PROMPT.md)
-- [Eval Harness](./EVAL_HARNESS.md)
-- [Ai Coding Rules](./AI_CODING_RULES.md)
+- [Master Prompt](./MASTER_PROMPT.md) — the canonical prompt spec
+- [Eval Harness](./EVAL_HARNESS.md) — prompt testing framework
+- [Metrics](./METRICS.md) — metrics compared during A/B testing
+- [Implementation Roadmap](./IMPLEMENTATION_ROADMAP.md) — prompt governance phased rollout
 - [System Overview](./SYSTEM_OVERVIEW.md)
-- [Main Ai Kernel](./MAIN_AI_KERNEL.md)
-- [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)
+- [AI Coding Rules](./AI_CODING_RULES.md)

@@ -1,121 +1,159 @@
 # QA Plan
 
-> Quality assurance plan for AI Dev OS covering functional, integration, prompt quality, security, performance, and reliability testing.
+> Quality assurance plan for AI Dev OS — test strategy, environment matrix, release gates, and quality metrics that ensure every release is reliable, secure, and performant. This document is normative — implementations MUST satisfy every MUST clause below.
 
 ## Overview
 
-The QA plan defines the testing strategy, environments, release gates, and quality metrics that ensure AI Dev OS releases are reliable, secure, and performant. QA is integrated into the CI/CD pipeline and enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md) as a release gate. Every change MUST pass the appropriate QA gates before merging.
+The QA plan defines the quality gates and testing activities that every AI Dev OS release must pass. Quality is integrated into the CI/CD pipeline (see [CI/CD](./CICD.md)) and enforced by the [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md) as a release gate. Every change—documentation, prompt, configuration, or code—MUST pass the appropriate QA gates before merging.
 
-## QA Categories
+QA activities span five levels: **unit**, **integration**, **system**, **acceptance**, and **release**.
 
-| Category | Focus | Owner |
-|---|---|---|
-| Functional testing | Core subsystem contracts, API correctness | Development team |
-| Integration testing | Cross-subsystem contracts, SCE event flow | Integration team |
-| Prompt quality | Instruction following, output consistency, safety | AI quality team |
-| Security testing | Auth, encryption, secret handling, injection | Security team |
-| Performance testing | Latency targets, throughput, memory, GPU | Performance team |
-| Reliability testing | Fault injection, recovery, degradation paths | Reliability team |
+## Goals
 
-### Functional Testing
+- Every commit passes automated unit + integration + acceptance tests before merging.
+- Every release candidate passes the full QA suite (system tests, benchmarks, security scan, compliance check).
+- QA gates are documented, automated, and measured — no manual sign-off is required for standard changes.
+- Regression are caught before they reach a release — the benchmark suite detects performance degradation automatically.
 
-- Unit tests for every subsystem contract (see [Testing Strategy](./TESTING_STRATEGY.md)).
-- API endpoint tests (happy path + error cases) per [API Spec](./API_SPEC.md).
-- CLI command smoke tests for every `aidevos` subcommand.
+## Non-Goals
 
-### Integration Testing
+- Model output quality evaluation — that is the domain of the [Eval Harness](./EVAL_HARNESS.md).
+- Performance benchmarking methodology — covered in [Benchmarks](./BENCHMARKS.md).
+- Implementation code — this repo is documentation-only ([AI Coding Rules](./AI_CODING_RULES.md)).
 
-- SCE event propagation across Kernel → Worker → Guardian → Memory.
-- Model provider integration with mock provider responses.
-- Plugin lifecycle: load → init → call → unload.
-- End-to-end run: intake → plan → route → execute → critique → merge → guard → deliver.
+## Test Pyramid
 
-### Prompt Quality
+```mermaid
+flowchart BT
+  ACCEPTANCE[Acceptance Tests\nfew, end-to-end]
+  SYSTEM[System Tests\nsome, cross-subsystem]
+  INTEGRATION[Integration Tests\nmany, subsystem + mock boundaries]
+  UNIT[Unit Tests\na lot, single function/component]
 
-- Eval suite from [Eval Harness](./EVAL_HARNESS.md) run against every model provider.
-- Governance rule compliance (see [Prompt Governance](./PROMPT_GOVERNANCE.md)).
-- Safety check: output does not contain prohibited content (see [AI Safety](./AI_SAFETY.md)).
+  UNIT --- INTEGRATION
+  INTEGRATION --- SYSTEM
+  SYSTEM --- ACCEPTANCE
+```
 
-### Security Testing
+### Unit Tests
 
-- Authentication and authorization bypass attempts (see [Auth System](./AUTH_SYSTEM.md)).
-- Encryption verification: data at rest and in transit (see [Encryption](./ENCRYPTION.md)).
-- Secret injection detection: no secrets in logs or SCE events.
-- Dependency vulnerability scan on every build.
+| Aspect | Detail |
+|--------|--------|
+| Scope | Single function, component, or subsystem boundary |
+| Dependencies | Mocked / stubbed |
+| Location | `tests/unit/<subsystem>/` |
+| Coverage target | ≥ 80% line coverage for all subsystems |
+| CI trigger | Every commit to any branch |
+| Runner | `aidevos test --unit` or language-native runner (Vitest, pytest) |
+| Timeout | 30 seconds total |
 
-### Performance Testing
+### Integration Tests
 
-- Benchmarks from [Benchmarks](./BENCHMARKS.md) run on reference hardware.
-- Latency targets from [Performance](./PERFORMANCE.md) — all MUST pass.
-- Memory leak detection: 1-hour soak run with stable RSS.
+| Aspect | Detail |
+|--------|--------|
+| Scope | Two or more subsystems interacting through their documented interfaces |
+| Dependencies | Real implementations (SQLite, in-memory SCE), but no external network |
+| Location | `tests/integration/<scenario>/` |
+| CI trigger | Every commit to `main` or release branch |
+| Runner | `aidevos test --integration` |
+| Timeout | 5 minutes total |
 
-### Reliability Testing
+### System Tests
 
-- Fault injection: drop SCE events, kill workers, corrupt cache.
-- Recovery: auto-restart, replay, reindex after failure.
-- Degradation: verify graceful degradation when dependencies are unavailable.
+| Aspect | Detail |
+|--------|--------|
+| Scope | End-to-end workflows: full Kernel loop, model discovery, memory persistence |
+| Dependencies | Real SQLite, Ollama (local model), mock model provider |
+| Location | `tests/system/<scenario>/` |
+| CI trigger | Every PR to `main` + nightly |
+| Runner | `aidevos test --system` |
+| Timeout | 15 minutes total |
 
-## Test Environments
+### Acceptance Tests
 
-| Environment | Purpose | Schedule | Data |
-|---|---|---|---|
-| Local dev | Developer iteration | On commit | Synthetic |
-| CI (GitHub Actions) | Pre-merge validation | Per PR | Synthetic |
-| Staging | Pre-release validation | Per release candidate | Anonymized production snapshot |
-| Production canary | Canary deployment monitoring | Continuous | Real (read-only metrics) |
+| Aspect | Detail |
+|--------|--------|
+| Scope | Business-critical scenarios from the [PRD](./PRD.md) and subsystem acceptance criteria |
+| Dependencies | Full local deployment (no cloud) |
+| Location | `tests/acceptance/<scenario>/` |
+| CI trigger | Release candidate builds |
+| Runner | `aidevos test --acceptance` (or `aidevos eval` via [Eval Harness](./EVAL_HARNESS.md)) |
+| Timeout | 30 minutes total |
 
-## Release QA Checklist
+## Environment Matrix
 
-Every release candidate MUST pass the following before shipping:
+| Environment | OS | Runtime | Database | Model Provider | Purpose |
+|------------|-----|---------|----------|----------------|---------|
+| **dev** | macOS | Node.js 22 | SQLite | Ollama | Developer laptop |
+| **ci-unit** | Ubuntu 22.04 | Node.js 22 LTS | SQLite (:memory:) | mock | Fast CI feedback |
+| **ci-integration** | Ubuntu 22.04 | Node.js 22 LTS | SQLite (file) | mock | Interface contract tests |
+| **ci-system** | Ubuntu 22.04 | Node.js 22 LTS | SQLite (file) | Ollama + mock | Cross-subsystem workflows |
+| **staging** | Ubuntu 22.04 | Node.js 22 LTS | Postgres 16 | Ollama + cloud | Pre-release validation |
+| **production** | Ubuntu 22.04 | Node.js 22 LTS | Postgres 16 | All configured providers | Live |
 
-- [ ] All CI tests pass (functional + integration + security).
-- [ ] Eval harness suite passes for all active model providers.
-- [ ] Performance benchmarks meet all targets (see [Performance](./PERFORMANCE.md)).
-- [ ] Reliability fault-injection suite passes (no data loss, auto-recovery).
-- [ ] No critical or high-severity open bugs against the release.
-- [ ] Security scan reports zero new vulnerabilities.
-- [ ] Changelog reviewed for accuracy.
+## Release Gates
 
-## Regression Testing Strategy
+Every release candidate must pass these gates in order:
 
-- Every bug fix includes a test that reproduces the bug (see [Testing Strategy](./TESTING_STRATEGY.md)).
-- The full eval harness suite is run against every release candidate and compared to the previous release.
-- A regression is defined as any metric that degrades by > 5% (latency, throughput, eval score).
-- Regressions block release and require either a fix or a documented trade-off approved by the QA lead.
+| Gate | Check | Tool | Blocking? |
+|------|-------|------|-----------|
+| **G1: Lint** | No lint errors (ESLint, Rust Clippy, Markdown lint) | `aidevos lint` | Yes |
+| **G2: Unit tests** | All unit tests pass, ≥ 80% coverage | `aidevos test --unit` | Yes |
+| **G3: Integration tests** | All integration tests pass | `aidevos test --integration` | Yes |
+| **G4: System tests** | All system tests pass | `aidevos test --system` | Yes |
+| **G5: Benchmark regression** | No benchmark degraded > 10% from baseline | `aidevos benchmark --compare HEAD~1` | Yes |
+| **G6: Security scan** | No critical/high vulnerabilities in dependencies | `npm audit`, `cargo audit`, Trivy | Yes |
+| **G7: Eval Harness** | Pass rate ≥ 90% on default prompt suite | `aidevos eval --suite default` | Yes |
+| **G8: Changelog** | `[Unreleased]` section populated | Manual review | Yes |
+| **G9: Migration guide** | Migration steps documented (if breaking) | Manual review | Changes only |
+| **G10: Sign-off** | QA lead approves the release artifact | Manual | Yes |
 
-## Manual Testing Scenarios
+## Quality Metrics
 
-Scenarios that require human review, run before each major release:
+| Metric | Target | Measurement | Alert if |
+|--------|--------|-------------|----------|
+| Unit test coverage | ≥ 80% | Code coverage tool | < 75% |
+| Integration test pass rate | 100% | CI | Any failure |
+| System test pass rate | 100% | CI | Any failure |
+| Eval Harness pass rate | ≥ 90% | `aidevos eval` | < 85% |
+| Benchmark regression | ≤ 10% degradation | `aidevos benchmark` | > 10% |
+| Critical security vulns | 0 | Dependency scanner | > 0 |
+| High security vulns | 0 | Dependency scanner | > 2 |
+| CI pipeline duration | < 15 min | CI dashboard | > 30 min |
+| Time to fix regression | < 24 hours | Incident tracker | > 48 hours |
 
-1. **First-run experience**: Install, configure, run a simple task end-to-end.
-2. **Multi-agent workflow**: Run a task that requires 3+ agents with shared context.
-3. **Error recovery**: Kill a worker mid-task and verify the run completes.
-4. **Large context**: Run a task with 50 K+ tokens of context.
-5. **Plugin extension**: Load a custom plugin and verify it participates in the loop.
+## Test Data Management
 
-## Bug Tracking Process
+- Unit tests use factories/fixtures defined alongside the test file.
+- Integration tests use a shared SQLite test database that is reset between test suites.
+- System tests use a dedicated `~/.aidevos-test/` config directory to avoid polluting the developer's real config.
+- No test accesses production APIs, production data, or external network resources.
+- Mock model providers return deterministic, configurable responses.
 
-- All bugs are filed in the issue tracker with severity (`critical`, `high`, `medium`, `low`).
-- Critical bugs block the release. High bugs require a documented workaround.
-- Every bug MUST include: steps to reproduce, expected vs actual behavior, environment, logs.
-- Bugs are triaged weekly by the QA lead. See [Error Handling](./ERROR_HANDLING.md) for error taxonomy.
+## Failure Modes
 
-## Quality Metrics and Targets
+| Mode | Detection | Response |
+|------|-----------|----------|
+| Flaky test | > 10% failure rate across CI runs | Mark test as `flaky`; suppress CI failure; require investigation within 48 hours |
+| Coverage regression | Coverage drops > 5% | Block PR; require new tests to restore coverage |
+| CI timeout | Pipeline exceeds 30 min | Split CI into parallel jobs; optimize slow tests |
+| Environment mismatch | Test passes locally, fails in CI | Pin CI environment to a reproducible container image |
+| Security vulnerability | Dependency scanner finds CVE | Block PR if critical; schedule fix within SLA based on severity |
 
-| Metric | Target | Measurement |
-|---|---|---|
-| Test pass rate (CI) | 100% | Per build |
-| Eval harness score | > 85% | Per model provider |
-| Performance targets met | 100% of MUST targets | Per release |
-| Regression rate | < 2% metric degradation | Per release |
-| Critical bug count | 0 at release | At ship time |
-| Security vulns (critical/high) | 0 | Per scan |
+## Acceptance Criteria
+
+- A PR that adds a new feature without unit tests is blocked at G2.
+- A PR that introduces a > 10% benchmark regression on any microbenchmark is blocked at G5.
+- Running `aidevos test` with no arguments runs all unit + integration tests and exits with 0.
+- The CI pipeline for a trivial documentation change (e.g. fixing a typo) completes in under 2 minutes (only lint + unit tests).
+- The full CI pipeline for a release candidate completes in under 30 minutes.
 
 ## Related Documents
 
-- [Testing Strategy](./TESTING_STRATEGY.md) — unit, integration, and regression test practices
-- [Eval Harness](./EVAL_HARNESS.md) — structured evaluation framework for prompts and models
-- [Benchmarks](./BENCHMARKS.md) — performance and quality benchmarking
-- [Error Handling](./ERROR_HANDLING.md) — error taxonomy, codes, and recovery
-- [Release Process](./RELEASE_PROCESS.md) — staging, canary, and production release steps
-- [Security Model](./SECURITY_MODEL.md) — security testing scope
+- [Testing Strategy](./TESTING_STRATEGY.md) — detailed testing approach, test doubles, coverage targets
+- [Eval Harness](./EVAL_HARNESS.md) — functional agent output evaluation
+- [Benchmarks](./BENCHMARKS.md) — performance benchmarking
+- [CI/CD](./CICD.md) — pipeline definition
+- [Release Process](./RELEASE_PROCESS.md) — release workflow
+- [Security](./SECURITY.md) — security testing (SAST, DAST, dependency scanning)
+- [System Overview](./SYSTEM_OVERVIEW.md)

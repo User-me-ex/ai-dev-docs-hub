@@ -1,127 +1,170 @@
 # Benchmarks
 
-> Benchmarking framework for measuring system performance, model quality, and end-to-end task completion in AI Dev OS.
+> Performance benchmark suite for AI Dev OS — methodology, targets, and results for every subsystem across multiple hardware configurations. This document is normative — implementations MUST satisfy every MUST clause below.
 
 ## Overview
 
-The benchmarking subsystem provides a unified framework for measuring and tracking AI Dev OS performance across hardware, model inference, and task execution dimensions. Benchmarks are automated, reproducible, and published alongside releases in the changelog. Every benchmark run emits structured results to the metrics pipeline defined in [Observability](./OBSERVABILITY.md).
+The benchmark suite measures the performance of every AI Dev OS subsystem against defined targets. Benchmarks are run automatically in CI (per commit) and on-demand by operators. Results are published to a dashboard and compared against historical baselines to detect regressions.
+
+Benchmarks are categorised into **microbenchmarks** (single-operation latency), **workload benchmarks** (end-to-end run scenarios), and **stress benchmarks** (resource limits and throughput ceilings).
+
+## Goals
+
+- Every subsystem has at least one benchmark that exercises its primary operation (e.g. SCE publish, memory query, Guardian check).
+- Benchmarks are reproducible: the same hardware produces results within ±5% across runs.
+- Regression detection is automated: a benchmark that degrades by >10% from its baseline blocks the CI pipeline.
+- Results are published to a publicly accessible dashboard for community transparency.
+
+## Non-Goals
+
+- Model performance benchmarks — model latency depends on the provider, not AI Dev OS. Use external tools (Helicone, LangFuse) for that.
+- Functional testing — covered by [Testing Strategy](./TESTING_STRATEGY.md) and [Eval Harness](./EVAL_HARNESS.md).
+- Implementation code — this repo is documentation-only ([AI Coding Rules](./AI_CODING_RULES.md)).
 
 ## Benchmark Categories
 
-| Category | What It Measures | Tooling |
-|---|---|---|
-| System performance | Kernel loop, SCE, memory, vector, graph | `aidevos benchmark run system` |
-| Model quality | Response quality, instruction following, tool use | `aidevos benchmark run model` |
-| Task completion | End-to-end runs, multi-agent coordination, merges | `aidevos benchmark run task` |
-| Prompt quality | Prompt adherence, governance rule coverage | `aidevos benchmark run prompt` |
+### Subsystem Microbenchmarks
 
-## System Benchmarks
+| Subsystem | Benchmark | Metric | Target (p99) |
+|-----------|-----------|--------|-------------|
+| **Kernel** | `kernel.intake` — parse a goal, create RunSpec | latency | < 5 ms |
+| **Kernel** | `kernel.status` — query run status from SCE | latency | < 2 ms |
+| **SCE** | `sce.publish` — publish 1 KB event | latency | < 5 ms |
+| **SCE** | `sce.subscribe` — cold subscriber snapshot + tail of 100k events | latency | < 2 s |
+| **SCE** | `sce.snapshot` — create topic snapshot with 10k events | latency | < 500 ms |
+| **Memory** | `memory.write` — write 1 KB record | latency | < 5 ms |
+| **Memory** | `memory.query` — ANN query over 10k vectors (cosine, k=10) | latency | < 100 ms |
+| **Memory** | `memory.query` — full-text query over 10k records (BM25, k=10) | latency | < 50 ms |
+| **Memory** | `memory.retention` — delete 1000 expired records | latency | < 200 ms |
+| **Router** | `router.discovery` — full refresh across 3 providers (mock) | latency | < 500 ms |
+| **Router** | `router.assign` — role-to-model assignment change | latency | < 10 ms |
+| **Router** | `router.list` — list cached models (500 models, 7 groups) | latency | < 5 ms |
+| **Guardian** | `guardian.check` — evaluate artifact against 14 rules (full set) | latency | < 500 ms |
+| **Guardian** | `guardian.rule` — single rule evaluation | latency | < 50 ms |
+| **Merge** | `merge.three_way` — clean merge, two 10 KB Markdown files | latency | < 200 ms |
+| **Merge** | `merge.three_way` — conflict merge, two 10 KB Markdown files | latency | < 500 ms |
+| **Queue** | `queue.enqueue` — enqueue 1 KB task | latency | < 100 µs |
+| **Queue** | `queue.dequeue` — dequeue next task (priority queue, 1000 items) | latency | < 500 µs |
+| **Graph** | `graph.neighbors` — one-hop neighbors of a document (1000-node graph) | latency | < 10 ms |
+| **Graph** | `graph.path` — shortest path between two documents (1000-node graph) | latency | < 50 ms |
+| **Auth** | `auth.login` — validate credentials and issue JWT | latency | < 20 ms |
+| **Auth** | `authz.resolve` — resolve effective permissions for a user (10 roles) | latency | < 5 ms |
 
-| Benchmark | Metric | Target | Notes |
-|---|---|---|---|
-| Kernel loop latency | p99 latency per loop iteration | < 5 s | Full intake → deliver cycle |
-| SCE publish throughput | events/s sustained | > 1000/s | Single worker, 1 KB events |
-| SCE subscribe latency | p99 delivery from publish | < 10 ms | Same-process subscriber |
-| Memory query latency | p95 vector + metadata hybrid query | < 100 ms | 10 K vector index |
-| Vector index build | seconds per 10 K embeddings | < 30 s | HNSW, efConstruction=200 |
-| Vector index query | p99 recall @ 10 | > 0.95 | On standard benchmark set |
-| Graph traversal speed | edges traversed / s | > 500 K/s | Adjacency list, depth-first |
+### End-to-End Workload Benchmarks
 
-## Model Benchmarks
+| Workload | Description | Metric | Target |
+|----------|------------|--------|--------|
+| **Hello World** | Single-task goal: `"say hello"` with Ollama | Total wall time (p99) | < 5 s |
+| **Code Review** | Goal: `"review this PR"` with 3 parallel reviewer agents | Total wall time (p99) | < 30 s |
+| **Web Research** | Goal: `"research TanStack Router docs"` with Research Engine | Total wall time (p99) | < 120 s |
+| **Memory Load** | 100 concurrent memory queries while writing 10 records/sec | P95 query latency | < 500 ms |
+| **SCE Throughput** | 10,000 events/s published to 5 topics with 3 subscribers each | P95 publish latency | < 20 ms |
+| **Full Pipeline** | goal → intake → plan → route → execute → critique → merge → guard → deliver (mock, all local) | Total wall time (p99) | < 10 s |
 
-Benchmarks are run against each [Model Provider](./MODEL_PROVIDERS.md) integration and reported per-model.
+### Stress Benchmarks
 
-| Benchmark | Measurement | Method |
-|---|---|---|
-| Response quality | Human-annotated score (1–5) | Sample 200 prompts from eval suite |
-| Instruction following | Binary pass/fail on constraint tests | Eval Harness governance suite |
-| Tool use accuracy | Correct tool selection rate | 50 multi-step tool-use scenarios |
-| Output consistency | Semantic similarity across 5 runs | Embedding cosine similarity > 0.92 |
+| Test | Description | Boundary | Expected behaviour |
+|------|------------|----------|-------------------|
+| **Memory capacity** | Insert records until out of space | 100,000 records in SQLite + 50,000 vectors | Graceful "out of space" error; no crash |
+| **SCE topic depth** | Publish events without any subscriber | 1,000,000 events in a single topic | Compaction triggers; topic remains queryable |
+| **Concurrent runs** | Submit 50 runs simultaneously | 50 concurrent Kernel runs | Priority queue disciplines; no run starves > 60s |
+| **File descriptor limit** | Open connections until OS limit | 4096 FDs | Graceful connection refusal; no crash |
+| **Memory leak detection** | Run "hello world" 10,000 times in a loop | 10,000 iterations | Memory usage stabilises; no monotonic growth |
+| **Queue backpressure** | Enqueue 10,000 items with slow consumer (1 item/s) | 10,000:1 production:consumption ratio | Consumer applies backpressure; producer pauses within configurable limits |
 
-Results feed into the [Model Routing Policy](./MODEL_ROUTING_POLICY.md) to select optimal providers per task class.
+## Methodology
 
-## Task Benchmarks
+### Hardware Specifications
 
-| Benchmark | Description | Target |
-|---|---|---|
-| E2E run completion | Multi-step coding task from intake to merge | > 85% pass rate |
-| Multi-agent coordination | 3-agent task with shared context | < 15% coordination overhead |
-| Merge correctness | PR merge without conflicts or regressions | > 95% clean merge rate |
-| Regression detection | Existing tests still pass after change | 100% |
+Benchmarks are run on two reference configurations:
 
-## Running Benchmarks
+| Spec | Developer Laptop | CI Runner |
+|------|-----------------|-----------|
+| CPU | Apple M3 Pro (12 cores) | AMD EPYC 7763 (4 vCPU) |
+| RAM | 36 GB | 16 GB |
+| Storage | 1 TB SSD (3000 MB/s) | 256 GB SSD (500 MB/s) |
+| OS | macOS 15 | Ubuntu 22.04 |
+| Runtime | Node.js 22 LTS | Node.js 22 LTS |
 
-```bash
-aidevos benchmark run system      # all system benchmarks
-aidevos benchmark run model        # all model benchmarks
-aidevos benchmark run task         # all task benchmarks
-aidevos benchmark run <suite> --verbose   # detailed per-test output
-aidevos benchmark list             # list available suites and tests
-```
+### Measurement Protocol
 
-Results are written to `~/.aidevos/benchmarks/<run_id>/` as JSON and can be compared with `aidevos benchmark diff <run_a> <run_b>`.
+1. Warm-up: run the benchmark 3 times before recording results.
+2. Measurement: run 100 iterations (microbenchmarks) or 10 iterations (workloads).
+3. Reporting: publish `{ p50, p90, p95, p99, mean, min, max, stddev }`.
+4. Baseline: compare against the previous commit's results. Regressions >10% trigger CI failure.
 
-## Publishing Results
+## Results
 
-Benchmark results are published with each release:
-
-1. Run `aidevos benchmark run all` on the reference hardware (see Environment below).
-2. Results are stored in `benchmarks/<version>/` in the release artifact.
-3. A summary table is included in the [Changelog](./CHANGELOG.md) under the release notes.
-4. Historical results are queryable via `aidevos benchmark history --suite <suite>`.
-
-## Benchmark Environment Requirements
-
-| Requirement | Specification |
-|---|---|
-| CPU | 16+ cores, x86_64 / ARM64 |
-| RAM | 32 GB minimum |
-| GPU | NVIDIA A100 40 GB or equivalent (for model benchmarks) |
-| Disk | NVMe SSD, 500 GB free |
-| OS | Ubuntu 22.04 or macOS 14+ |
-| Python | 3.11+ |
-
-System benchmarks run on CPU only. Model benchmarks require GPU. All benchmarks MUST be run in an isolated environment with no other load.
-
-## Interpreting Results
-
-Benchmark results are reported as JSON with the following structure:
+Results are stored in `benchmarks/results/` as JSON files with the following schema:
 
 ```json
 {
-  "suite": "system",
-  "run_id": "20260722_153042_abc123",
-  "environment": { "cpu": "AMD EPYC 7763", "ram_gb": 64, "gpu": "A100-40GB" },
-  "tests": [
-    { "name": "kernel_loop_latency", "metric": "p99", "value_ms": 3200, "target_ms": 5000, "pass": true }
-  ]
+  "benchmark": "kernel.intake",
+  "date": "2026-07-22T12:00:00Z",
+  "hardware": "ci-runner",
+  "runtime": "node-v22.0.0",
+  "iterations": 100,
+  "results": {
+    "p50": 1.2,
+    "p90": 2.1,
+    "p95": 3.0,
+    "p99": 4.5,
+    "mean": 1.5,
+    "min": 0.8,
+    "max": 5.1,
+    "stddev": 0.4
+  },
+  "baseline": {
+    "commit": "abc123",
+    "p99": 4.2
+  },
+  "regression": false
 }
 ```
 
-Use `aidevos benchmark diff <run_a> <run_b>` to compare two runs. A regression is flagged when a metric degrades by > 10% from the baseline run.
+A regression dashboard (Grafana) visualises results over time.
 
-## Custom Benchmarks
+## Implementation Notes
 
-Benchmark suites are defined as YAML files in `benchmarks/suites/`:
+- Benchmarks MUST be self-contained: no network calls, no external dependencies. Mock model providers and in-memory store backends are used.
+- Each benchmark SHALL be a standalone script or binary that writes its result JSON to stdout.
+- The benchmark runner (`aidevos benchmark [name]`) discovers scripts in `benchmarks/`, executes them, collects results, and compares against baselines.
+- The CI pipeline runs all microbenchmarks on every commit. Workload benchmarks run nightly. Stress benchmarks run weekly.
 
-```yaml
-name: custom_system
-tests:
-  - name: kernel_loop_latency
-    metric: p99
-    target_ms: 5000
-  - name: sce_publish_throughput
-    metric: events_per_second
-    target: 1000
-```
+## Failure Modes
 
-Run with `aidevos benchmark run custom_system --suite-file ./benchmarks/suites/custom.yaml`.
+| Mode | Detection | Response |
+|------|-----------|----------|
+| Benchmark flakiness | >10% variance across runs | Mark benchmark as "unstable"; require manual review; investigate root cause |
+| Baseline not found | No baseline for new benchmark | Log WARN; record results without comparison |
+| Hardware mismatch | CPU model differs from reference | Tag results with actual hardware; do not compare against incompatible baselines |
+| Benchmark timeout | >5 minutes without completion | Kill process; mark as FAILED; log full output |
+| Regression detected | P99 degraded >10% | Block CI; notify subsystem owner; require fix or documented exception |
+
+## Performance Targets (from [Performance](./PERFORMANCE.md))
+
+| Target | Value | Benchmarked by |
+|--------|-------|----------------|
+| Kernel loop p99 (local, single-task) | < 5 s | `benchmarks/workload-hello-world` |
+| SCE publish p99 (SQLite) | < 5 ms | `benchmarks/sce-publish` |
+| Memory query p95 (10k records) | < 100 ms | `benchmarks/memory-query-ann` |
+| Guardian check p95 (14 rules) | < 500 ms | `benchmarks/guardian-check` |
+| Merge commit p95 (clean) | < 200 ms | `benchmarks/merge-three-way` |
+| Model discovery refresh p99 (3 providers) | < 3 s | `benchmarks/router-discovery` |
+| CLI startup p99 | < 100 ms | `benchmarks/cli-startup` |
+
+## Acceptance Criteria
+
+- Running `aidevos benchmark --all` executes all microbenchmarks and produces a JSON report within 5 minutes.
+- The CI pipeline contains a benchmark check step that fails when a benchmark degrades >10% from the baseline.
+- `aidevos benchmark --compare abc123` compares current results against the `abc123` baseline and highlights differences.
+- A fresh checkout on the reference developer laptop produces results within 10% of the published baseline for every microbenchmark.
+- The memory benchmark at 10k records and 50k vectors does not exceed 500 MB RSS.
 
 ## Related Documents
 
-- [Eval Harness](./EVAL_HARNESS.md) — structured evaluation of prompt and model outputs
-- [Testing Strategy](./TESTING_STRATEGY.md) — unit, integration, and regression tests
-- [Performance](./PERFORMANCE.md) — performance characteristics and optimization guide
-- [Reliability](./RELIABILITY.md) — fault tolerance and uptime guarantees
-- [Observability](./OBSERVABILITY.md) — metrics pipeline and dashboards
-- [Model Routing Policy](./MODEL_ROUTING_POLICY.md) — how benchmark results influence provider selection
+- [Performance](./PERFORMANCE.md) — performance targets per subsystem
+- [Testing Strategy](./TESTING_STRATEGY.md) — how benchmarks integrate with test pipeline
+- [Eval Harness](./EVAL_HARNESS.md) — functional and prompt evaluation (complementary to benchmarks)
+- [Observability](./OBSERVABILITY.md) — runtime monitoring that uses benchmark targets as SLOs
+- [System Overview](./SYSTEM_OVERVIEW.md)

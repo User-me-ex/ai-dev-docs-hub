@@ -82,7 +82,7 @@ Every failure emits a structured event on the Shared Context Engine and is recor
 ## Related Documents
 
 - [System Overview](./SYSTEM_OVERVIEW.md)
-- [Main Ai Kernel](./MAIN_AI_KERNEL.md)
+- [Main AI Kernel](./MAIN_AI_KERNEL.md)
 - [Prd](./PRD.md)
 - [Trd](./TRD.md)
 - [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)

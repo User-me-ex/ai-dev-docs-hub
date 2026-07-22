@@ -1,104 +1,147 @@
 # Compliance
 
-> Compliance considerations for AI Dev OS deployments.
+> Regulatory compliance framework for AI Dev OS — controls mapping, evidence collection, audit readiness for SOC 2, GDPR, and CCPA. This document is normative — implementations MUST satisfy every MUST clause below.
 
 ## Overview
 
-AI Dev OS is a local-first development tool. It does not itself process
-personal data on a central server, and it does not require a cloud service
-to operate. However, compliance with regulations such as GDPR, SOC 2, and
-CCPA depends on how the tool is deployed, configured, and used within an
-organisation. This document describes the built-in features that support
-compliance programmes and the limitations that deployers must address
-independently.
+Compliance defines the controls, processes, and evidence artifacts that demonstrate AI Dev OS meets regulatory and security standards. The system is designed with a **compliance-by-default** approach: the architectural invariants (no hidden state, append-only audit log, least-privilege tools, signed envelopes) naturally satisfy many control requirements without bolt-on processes.
 
-## Built-in Compliance Features
+This document covers three frameworks. Other frameworks (HIPAA, FedRAMP, PCI-DSS) are out of scope for v1.0 but the control framework is extensible.
 
-| Feature | Description | Relevant Standard |
-|---|---|---|
-| **Audit log** | Append-only, hash-chained log of all security-relevant operations. Tamper-evident: any modification breaks the hash chain. | SOC 2, GDPR (Art. 30) |
-| **RBAC** | Role-based access control with fine-grained capabilities. Every action is tied to an authenticated actor. | SOC 2 (CC6, CC7) |
-| **Tenant isolation** | Workspaces are cryptographically isolated. No workspace can read another's data without the corresponding key. | SOC 2 (CC6) |
-| **Data retention controls** | Per-category TTLs, automated pruning, and manual flush commands. | GDPR (Art. 5(1)(e)) |
-| **Encryption at rest** | AES-256-GCM for memory records, age for config, SQLite cipher for databases. | SOC 2 (CC6) |
-| **Encryption in transit** | TLS 1.3 for all remote communication. | SOC 2 (CC6) |
-| **Export API** | `workspace export` produces a portable archive of all workspace data in JSON. | GDPR (Art. 20) |
-| **Data deletion** | `workspace delete` removes all local data for a workspace. Telemetry data can be deleted on the server side. | GDPR (Art. 17) |
+## Goals
 
-## GDPR Readiness
+- Every compliance control maps to one or more architectural invariants or documented processes.
+- Evidence is collected automatically by the Audit Log, Metrics, and Observability subsystems — no manual evidence gathering for standard controls.
+- The compliance posture is continuously measurable, not point-in-time.
+- All user data handling complies with GDPR and CCPA by default (opt-in telemetry, right to deletion, data portability).
 
-| Requirement | AI Dev OS Support |
-|---|---|
-| **Right to be informed** | [Privacy](PRIVACY.md) document describes exactly what data is collected and why. |
-| **Right of access** | Users can view all stored data via the CLI or by reading local files directly. |
-| **Right to rectification** | All config and memory records are editable. |
-| **Right to erasure** | `workspace delete` removes all local data. Telemetry data deletion is handled by the telemetry backend. |
-| **Right to data portability** | `workspace export` produces a JSON archive that can be imported into any system. |
-| **Data Processing Record** | The audit log serves as a record of processing activities (GDPR Art. 30). Every data access, modification, and export is recorded. |
-| **DPA readiness** | AI Dev OS does not act as a processor; the user's chosen model providers and cloud infrastructure providers may require a DPA. |
+## Non-Goals
 
-### Practical Steps for GDPR Compliance
+- Legal advice — this document describes technical controls, not legal compliance guarantees.
+- Certification — AI Dev OS has not been certified against any framework. This document describes the path to certification.
+- Implementation code — this repo is documentation-only ([AI Coding Rules](./AI_CODING_RULES.md)).
 
-1. Publish the [Privacy](PRIVACY.md) document to end users.
-2. Configure telemetry as disabled (default) or obtain explicit consent
-   before enabling.
-3. Review the model provider's DPA for any remote model APIs used.
-4. Set data retention TTLs in `workspace config` to match the
-   organisation's retention schedule.
-5. Use `workspace export` to fulfil data portability requests.
+## SOC 2 Controls Mapping
 
-## SOC 2 Readiness
+### Security (Common Criteria)
 
-| Trust Service Criteria | AI Dev OS Support | Gap / Action Required |
-|---|---|---|
-| **CC6 — Logical and Physical Access** | RBAC, encryption at rest and in transit, OS keychain integration | Deployers must manage OS-level access controls and keychain backup policies |
-| **CC7 — System Operations** | Audit log, health check API, metrics endpoint | Deployers must configure monitoring and alerting on audit log anomalies |
-| **CC8 — Change Management** | Configuration versioning, workspace snapshots, rollback support | Deployers must establish a change approval process for production workspaces |
-| **CC9 — Risk Mitigation** | Vendor risk is limited to model/search providers the user connects | Deployers must assess third-party providers independently |
+| Control | AI Dev OS Coverage | Evidence Source |
+|---------|-------------------|-----------------|
+| **CC1: Control Environment** | [AI Coding Rules](./AI_CODING_RULES.md) define agent behaviour; [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md) enforces rules | git history, Guardian audit log |
+| **CC2: Communication** | [Agent Communication](./AGENT_COMMUNICATION.md) defines signed envelopes; all inter-agent communication flows through SCE | SCE event log |
+| **CC3: Risk Assessment** | [Impact Analysis](./IMPACT_ANALYSIS.md) computes blast radius; [Security Model](./SECURITY_MODEL.md) documents threat model | Impact Analysis records |
+| **CC4: Monitoring** | [Observability](./OBSERVABILITY.md) provides metrics, traces, logs; [Metrics](./METRICS.md) define alerting rules | Prometheus metrics, alert history |
+| **CC5: Control Activities** | [Main AI Kernel](./MAIN_AI_KERNEL.md) enforces budget caps; [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md) enforces 14 built-in rules | Guardian verdict log |
+| **CC6: Logical & Physical Access** | [Auth System](./AUTH_SYSTEM.md) controls API access; [Security Model](./SECURITY_MODEL.md) defines trust boundaries; [IPC](./IPC.md) enforces local-only transport | Auth audit log |
+| **CC7: System Operations** | [Deployment](./DEPLOYMENT.md) defines operational procedures; [Backup Strategy](./BACKUP_STRATEGY.md) defines RPO/RTO | Deployment audit trail |
+| **CC8: Change Management** | [Release Process](./RELEASE_PROCESS.md), [Prompt Governance](./PROMPT_GOVERNANCE.md), [Versioning](./VERSIONING.md) control changes | git history, prompt registry |
 
-The audit log is the primary evidence source for SOC 2 examinations. It
-should be exported to a SIEM and retained according to the organisation's
-retention policy.
+### Availability
 
-## Enterprise Features
+| Control | AI Dev OS Coverage | Evidence Source |
+|---------|-------------------|-----------------|
+| **A1: Processing Integrity** | [Reliability](./RELIABILITY.md) defines uptime targets; [Queueing](./QUEUEING.md) ensures at-least-once delivery | Uptime metrics, queue depth metrics |
+| **A2: Availability** | [Disaster Recovery](./DISASTER_RECOVERY.md) defines recovery procedures; [Backup Strategy](./BACKUP_STRATEGY.md) defines RTO | DR test records |
 
-| Feature | Availability | Compliance Benefit |
-|---|---|---|
-| **SSO / SAML** | Via OIDC-compatible identity provider | Centralised access control and user lifecycle management |
-| **Audit log export to SIEM** | JSON streaming to stdout or file; syslog forwarding | Real-time monitoring and alerting |
-| **Legal hold** | Workspace snapshots can be frozen (read-only) to preserve data for litigation | Prevents spoliation during legal proceedings |
-| **Region-specific deployment** | Data stays on local infrastructure; no mandatory cloud dependency | Data residency control |
+### Confidentiality
 
-## Limitations
+| Control | AI Dev OS Coverage | Evidence Source |
+|---------|-------------------|-----------------|
+| **C1: Confidentiality** | [Encryption](./ENCRYPTION.md) defines at-rest and in-transit encryption; [Secrets Management](./SECRETS_MANAGEMENT.md) protects credentials | Encryption config audit |
+| **C2: Data Minimisation** | [Telemetry](./TELEMETRY.md) collects only anonymised, aggregated data; no PII in logs | Telemetry schema audit |
 
-> **AI Dev OS is a tool. Compliance is a practice.**
+### Privacy
 
-1. **Third-party model providers.** When AI Dev OS sends a prompt to a
-   remote model provider, that provider processes the data on its own
-   infrastructure. The organisation is responsible for ensuring that the
-   provider has appropriate safeguards (DPA, data region, etc.). AI Dev OS
-   recommends using providers that offer data retention opt-out and
-   zero-data-retention APIs.
+| Control | AI Dev OS Coverage | Evidence Source |
+|---------|-------------------|-----------------|
+| **P1: Notice** | [Privacy](./PRIVACY.md) policy is documented; first-run telemetry opt-in prompt | Privacy doc version |
+| **P2: Choice & Consent** | Telemetry is opt-in only; [Telemetry](./TELEMETRY.md) documents opt-in flow | Config audit |
+| **P3: Collection** | [Data Retention](./DATA_RETENTION.md) defines what is collected and for how long | Retention job audit |
+| **P4: Use** | Telemetry data is used only for product improvement; no third-party sharing | Data flow diagram |
+| **P5: Retention** | Retention policies in [Data Retention](./DATA_RETENTION.md); automated enforcement by retention job | Retention job metrics |
+| **P6: Disclosure** | No personal information is shared with third parties; [Telemetry](./TELEMETRY.md) documents collector | — |
+| **P7: Quality** | Data accuracy is maintained through append-only event model and checksummed records | Database integrity checks |
+| **P8: Access & Correction** | Users can delete all local data; telemetry data cannot be corrected (aggregated) | — |
 
-2. **Search providers.** Web search queries are sent to the configured
-   search provider. Organisations in regulated industries should use a
-   self-hosted or enterprise search endpoint.
+## GDPR Compliance
 
-3. **No built-in data classification.** AI Dev OS does not inspect or label
-   data for sensitivity. Deployers should implement data classification at
-   the policy level (e.g. restrict which workspaces can connect to which
-   providers).
+### Rights Mapping
 
-4. **Audit log is local by default.** For compliance in multi-user or
-   server deployments, the audit log must be forwarded to a central SIEM or
-   immutable storage.
+| GDPR Right | Technical Implementation |
+|------------|------------------------|
+| **Right to be Informed** | [Privacy](./PRIVACY.md) document; first-run telemetry prompt |
+| **Right of Access** | `aidevos telemetry status --verbose` shows all queued telemetry events |
+| **Right to Rectification** | User can edit local config; telemetry data is aggregated and cannot be rectified after send |
+| **Right to Erasure** | Users can delete `~/.aidevos/` to remove all local data; telemetry collector purges raw data after 90 days |
+| **Right to Restrict Processing** | Disabling telemetry stops all data transmission immediately |
+| **Right to Data Portability** | All local data is in standard formats (SQLite, JSON, YAML); user can copy freely |
+| **Right to Object** | Disabling telemetry is an irrevocable opt-out with no functionality loss |
+| **Rights Related to Automated Decision-Making** | All agent decisions are documented in the Audit Log and SCE; no fully automated decisions without human oversight |
+
+### Data Processing Register
+
+| Processing Activity | Data Categories | Purpose | Lawful Basis | Retention |
+|-------------------|----------------|---------|--------------|-----------|
+| Telemetry collection | Anonymised usage events (see [Telemetry](./TELEMETRY.md)) | Product improvement | Legitimate interest + opt-in consent | 90 days raw, 24 months aggregated |
+| Audit logging | Agent actions, run events, system changes | Security, compliance | Legitimate interest | 7 years |
+| Knowledge base storage | Code references, documentation excerpts | Agent context | Legitimate interest | Per KB tier policy |
+| User configuration | Model keys, provider credentials | System operation | Contractual necessity | Until deleted by user |
+
+## CCPA Compliance
+
+| CCPA Right | Technical Implementation |
+|------------|------------------------|
+| **Right to Know** | Telemetry data fields are documented in [Telemetry](TELEMETRY.md) |
+| **Right to Delete** | Delete `~/.aidevos/` to remove all local personal information |
+| **Right to Opt-Out** | `aidevos telemetry disable` — no data sold or shared with third parties |
+| **Right to Non-Discrimination** | No functionality difference between telemetry-enabled and disabled |
+
+## Evidence Collection
+
+The following subsystems automatically generate compliance evidence:
+
+| Evidence | Source | Frequency |
+|----------|--------|-----------|
+| Access logs | [Audit Log](./AUDIT_LOG.md) | Continuous |
+| Change history | git log + [Changelog](./CHANGELOG.md) | Per commit |
+| Configuration snapshots | [Configuration](./CONFIGURATION.md) backups | Per change |
+| Incident records | [Error Handling](./ERROR_HANDLING.md) events | Per incident |
+| Metric history | Prometheus tsdb | Rolling 90 days |
+| Trace spans | [Tracing](./TRACING.md) OTLP export | Configurable retention |
+| Backup verification | [Backup Strategy](./BACKUP_STRATEGY.md) restore test | Monthly |
+| DR test results | [Disaster Recovery](./DISASTER_RECOVERY.md) runbook | Quarterly |
+
+## Compliance Configuration
+
+```toml
+[AIDEVOS_COMPLIANCE]
+framework = "soc2"                          # primary framework
+data_retention_days = 2555                  # 7 years for audit log
+evidence_export_path = "~/.aidevos/compliance/"
+audit_contact = "security@aidevos.dev"
+```
+
+## Failure Modes
+
+| Mode | Detection | Response |
+|------|-----------|----------|
+| Audit log integrity check fails | Checksum mismatch | Freeze system; page security team; initiate incident response |
+| Retention policy not enforced | Records exceed retention period | Log WARN; trigger manual cleanup; audit non-compliance window |
+| Evidence gap detected | Missing metric/event for required control | Log WARN; report in compliance dashboard; initiate remediation |
+
+## Acceptance Criteria
+
+- An auditor can reconstruct every SOC2 control mapping from the documentation and automated evidence sources without manual interviews.
+- Deleting `~/.aidevos/` and re-installing produces a fresh installation with zero telemetry data and zero audit events from the previous installation.
+- The Audit Log supports a `compliance-check` tool that maps each SOC2 control to the corresponding audit entries for a given time range.
+- Telemetry data never contains code content, file names, or model inputs/outputs (verified by integration test).
 
 ## Related Documents
 
-- [Privacy](PRIVACY.md) — what data is collected and transmitted
-- [Security Model](SECURITY_MODEL.md) — threat model and trust boundaries
-- [Data Retention](DATA_RETENTION.md) — retention policies and
-  configuration
-- [Audit Log](AUDIT_LOG.md) — audit log schema and export
-- [Encryption](ENCRYPTION.md) — encryption at rest and in transit
-- [Auth System](AUTH_SYSTEM.md) — RBAC and SSO integration
+- [Privacy](./PRIVACY.md) — privacy policy
+- [Security Model](./SECURITY_MODEL.md) — trust boundaries and security controls
+- [Audit Log](./AUDIT_LOG.md) — append-only audit trail
+- [Data Retention](./DATA_RETENTION.md) — retention policies per data type
+- [Encryption](./ENCRYPTION.md) — data protection
+- [Telemetry](./TELEMETRY.md) — product telemetry (opt-in)
+- [System Overview](./SYSTEM_OVERVIEW.md)
