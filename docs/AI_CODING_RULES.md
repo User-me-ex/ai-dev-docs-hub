@@ -1,56 +1,35 @@
-# Ai Coding Rules
+# AI Coding Rules
 
-> Coding rules and conventions every AI agent must follow when producing code in this OS.
+> Rules every AI agent in the AI Dev OS MUST follow when producing or modifying code in a user project.
 
-## Overview
+## Core Rules
 
-Coding rules and conventions every AI agent must follow when producing code in this OS.
+1. **Small, reversible steps.** Prefer many small diffs over one large rewrite.
+2. **Read before write.** Never edit a file without first reading its current contents.
+3. **Respect the guardian.** The [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md) can veto a change; do not route around it.
+4. **Documentation-first.** New subsystems land as a doc in `docs/` before code exists.
+5. **Cite sources.** When applying an external pattern, cite the source in the commit/PR body.
+6. **No hidden state.** All persistent state must go through the [Shared Context Engine](./SHARED_CONTEXT_ENGINE.md) or an approved store.
+7. **Deterministic tests first.** New behavior requires a failing test before the fix.
+8. **Least privilege.** Request only the tools and scopes actually needed for the task.
+9. **Ask before destructive actions.** Deletions, migrations, and force-pushes require explicit confirmation.
+10. **Prefer standards.** OpenAPI, JSON Schema, Mermaid, Markdown, POSIX shell where possible.
 
-## Goals
+## Style
 
-- Provide an authoritative specification for Ai Coding Rules.
-- Define contracts, invariants, and acceptance criteria.
-- Enable AI agents to reason about Ai Coding Rules without ambiguity.
+- Match the surrounding code's style; do not reformat unrelated lines.
+- Public APIs MUST have doc comments; private helpers SHOULD.
+- Error messages MUST be actionable.
 
-## Non-Goals
+## Prohibited
 
-- Implementation code — this repository is documentation-only.
-- Vendor-specific tuning beyond what is stated in Model Providers.
-
-## Requirements
-
-- MUST be consumable by both humans and AI agents.
-- MUST link to related documents in the `Related Documents` section.
-- MUST be updated whenever the contract it describes changes.
-
-## Architecture
-
-_(Detailed architecture, diagrams, and sequence flows to be authored. See `diagrams/` for Mermaid sources.)_
-
-## Interfaces
-
-_(APIs, CLI commands, events, or file formats exposed by this subsystem.)_
-
-## Data Model
-
-_(Entities, fields, invariants, and retention rules.)_
-
-## Failure Modes
-
-_(Known failure modes, detection strategy, and recovery.)_
-
-## Security Considerations
-
-_(Trust boundaries, threat model, mitigations.)_
-
-## Open Questions
-
-- _None recorded yet._
+- Generating application code in this documentation-only repository.
+- Committing secrets or `.env` files.
+- Bypassing the [Merge Manager](./MERGE_MANAGER.md) for concurrent edits.
 
 ## Related Documents
 
-- [Product Vision](./PROJECT_VISION.md)
-- [PRD](./PRD.md)
-- [TRD](./TRD.md)
-- [Main AI Kernel](./MAIN_AI_KERNEL.md)
-- [System Overview](./SYSTEM_OVERVIEW.md)
+- [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)
+- [Merge Manager](./MERGE_MANAGER.md)
+- [Impact Analysis](./IMPACT_ANALYSIS.md)
+- [Prompt Governance](./PROMPT_GOVERNANCE.md)

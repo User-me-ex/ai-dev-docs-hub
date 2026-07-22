@@ -1,56 +1,52 @@
 # Nine Router
 
-> Nine Router — model discovery via /models endpoints, grouped by provider, with search, filter, refresh, and role assignment.
+> Model discovery, grouping, and role assignment across every connected provider.
 
 ## Overview
 
-Nine Router — model discovery via /models endpoints, grouped by provider, with search, filter, refresh, and role assignment.
+The Nine Router is the model-routing subsystem of the AI Dev OS. It discovers every model available to the workspace, normalizes their metadata, groups them by provider, and lets the user (or the kernel) assign models to the nine canonical roles.
 
-## Goals
+## The Nine Roles
 
-- Provide an authoritative specification for Nine Router.
-- Define contracts, invariants, and acceptance criteria.
-- Enable AI agents to reason about Nine Router without ambiguity.
+1. **Kernel** — top-level orchestrator.
+2. **Planner** — decomposes goals into task graphs.
+3. **Router** — selects models per subtask (recursive use of Nine Router).
+4. **Researcher** — retrieval and synthesis.
+5. **Builder** — code generation and edits.
+6. **Critic** — reviews and rejects unsafe or low-quality output.
+7. **Merger** — reconciles concurrent edits (see [Merge Manager](./MERGE_MANAGER.md)).
+8. **Guardian** — enforces architectural invariants (see [Architecture Guardian](./ARCHITECTURE_GUARDIAN.md)).
+9. **Voice** — speech I/O routing (see [Voice System](./VOICE_SYSTEM.md)).
 
-## Non-Goals
+## Model Discovery Requirements
 
-- Implementation code — this repository is documentation-only.
-- Vendor-specific tuning beyond what is stated in Model Providers.
+- Discovery MUST query each provider's `/models` endpoint (or the closest documented equivalent).
+- Results MUST be grouped by provider: OpenAI, Anthropic, Mistral, Google, Ollama, local (llama.cpp / MLX), and any user-registered provider.
+- Each discovered model MUST be normalized into `{ id, provider, display_name, context_window, modalities, capabilities, pricing?, deprecated? }`.
+- Discovery results MUST be cached with a TTL and a manual **Refresh** action.
+- Discovery MUST degrade gracefully when a provider is unreachable — partial results are surfaced with a per-provider error indicator.
 
-## Requirements
+## UI Requirements
 
-- MUST be consumable by both humans and AI agents.
-- MUST link to related documents in the `Related Documents` section.
-- MUST be updated whenever the contract it describes changes.
+The router UI MUST support:
 
-## Architecture
-
-_(Detailed architecture, diagrams, and sequence flows to be authored. See `diagrams/` for Mermaid sources.)_
-
-## Interfaces
-
-_(APIs, CLI commands, events, or file formats exposed by this subsystem.)_
+- **Search** across model IDs and display names.
+- **Filter** by provider, capability (tools, vision, audio), context window, modality, deprecation status.
+- **Refresh** to re-query `/models` on demand, per provider or globally.
+- **Assign** any discovered model to any of the nine roles, with per-project overrides.
+- **Fallback chains** — ordered lists of models per role, evaluated by the [Model Routing Policy](./MODEL_ROUTING_POLICY.md).
 
 ## Data Model
 
-_(Entities, fields, invariants, and retention rules.)_
+See [Model Discovery](./MODEL_DISCOVERY.md) for the normalized schema, and [Model Providers](./MODEL_PROVIDERS.md) for provider-specific quirks.
 
-## Failure Modes
+## Flow
 
-_(Known failure modes, detection strategy, and recovery.)_
-
-## Security Considerations
-
-_(Trust boundaries, threat model, mitigations.)_
-
-## Open Questions
-
-- _None recorded yet._
+See [diagrams/NINE_ROUTER_FLOW.md](../diagrams/NINE_ROUTER_FLOW.md).
 
 ## Related Documents
 
-- [Product Vision](./PROJECT_VISION.md)
-- [PRD](./PRD.md)
-- [TRD](./TRD.md)
+- [Model Discovery](./MODEL_DISCOVERY.md)
+- [Model Providers](./MODEL_PROVIDERS.md)
+- [Model Routing Policy](./MODEL_ROUTING_POLICY.md)
 - [Main AI Kernel](./MAIN_AI_KERNEL.md)
-- [System Overview](./SYSTEM_OVERVIEW.md)

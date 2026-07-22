@@ -1,56 +1,58 @@
 # Implementation Roadmap
 
-> Phased roadmap from bootstrap to v1.0 with milestones, dependencies, and exit criteria per phase.
+> Phased plan from bootstrap to v1.0.
 
-## Overview
+## Phase 0 — Documentation Bootstrap (this repo)
 
-Phased roadmap from bootstrap to v1.0 with milestones, dependencies, and exit criteria per phase.
+- Full spec set under `docs/`, `prompts/`, `diagrams/`, `templates/`.
+- Master Prompt v0 drafted and reviewed.
+- Nine Router spec finalized with `/models` discovery contract.
 
-## Goals
+## Phase 1 — Kernel & Router MVP
 
-- Provide an authoritative specification for Implementation Roadmap.
-- Define contracts, invariants, and acceptance criteria.
-- Enable AI agents to reason about Implementation Roadmap without ambiguity.
+- Main AI Kernel skeleton with role dispatch.
+- Nine Router with OpenAI, Anthropic, and Ollama providers.
+- CLI shell with `router list|refresh|assign`.
 
-## Non-Goals
+## Phase 2 — Context & Memory
 
-- Implementation code — this repository is documentation-only.
-- Vendor-specific tuning beyond what is stated in Model Providers.
+- Shared Context Engine with pub/sub.
+- Persistent Memory (episodic + semantic).
+- Obsidian Graph Engine read/write.
 
-## Requirements
+## Phase 3 — Groups & Workers
 
-- MUST be consumable by both humans and AI agents.
-- MUST link to related documents in the `Related Documents` section.
-- MUST be updated whenever the contract it describes changes.
+- AI Group System with Planner/Builder/Critic default group.
+- Dynamic Workers with autoscaling.
+- Task Graph + Job Scheduler.
 
-## Architecture
+## Phase 4 — Knowledge & Research
 
-_(Detailed architecture, diagrams, and sequence flows to be authored. See `diagrams/` for Mermaid sources.)_
+- Four-tier KBs (Global/Main/Group/Individual).
+- Research Engine with web + GitHub sources.
+- RAG pipeline over the graph.
 
-## Interfaces
+## Phase 5 — Merge, Guardian, Impact
 
-_(APIs, CLI commands, events, or file formats exposed by this subsystem.)_
+- Merge Manager for concurrent agent edits.
+- Architecture Guardian enforcing invariants.
+- Impact Analysis pre-flight for all edits.
 
-## Data Model
+## Phase 6 — Voice, Plugins, UX Polish
 
-_(Entities, fields, invariants, and retention rules.)_
+- Voice System (STT/TTS/wake-word).
+- Plugin SDK GA.
+- Desktop shell + web shell parity.
 
-## Failure Modes
+## Phase 7 — v1.0
 
-_(Known failure modes, detection strategy, and recovery.)_
-
-## Security Considerations
-
-_(Trust boundaries, threat model, mitigations.)_
-
-## Open Questions
-
-- _None recorded yet._
+- Reliability targets met (see [Reliability](./RELIABILITY.md)).
+- Eval Harness passing on all default prompts.
+- Docs, changelog, migration guides complete.
 
 ## Related Documents
 
-- [Product Vision](./PROJECT_VISION.md)
 - [PRD](./PRD.md)
 - [TRD](./TRD.md)
-- [Main AI Kernel](./MAIN_AI_KERNEL.md)
-- [System Overview](./SYSTEM_OVERVIEW.md)
+- [Roadmap](./ROADMAP.md)
+- [Release Process](./RELEASE_PROCESS.md)

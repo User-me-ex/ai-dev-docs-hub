@@ -1,56 +1,29 @@
-# Readme
+# AI Dev OS — Documentation
 
-> Entry point for the AI Dev OS documentation repository. Explains what this repo is, how to navigate it, and where to start reading.
+This repository is **documentation-only**. It contains the specifications, prompts, diagrams, and templates that define the AI Development Operating System (AI Dev OS). No application code is shipped here.
 
-## Overview
+## Layout
 
-Entry point for the AI Dev OS documentation repository. Explains what this repo is, how to navigate it, and where to start reading.
+- `docs/` — subsystem specifications, one Markdown file per topic.
+- `docs/knowledge-bases/` — the four-tier knowledge base spec (Global, Main, Group, Individual).
+- `prompts/` — canonical system, kernel, planner, router, critic, research, and agent prompts.
+- `diagrams/` — Mermaid diagrams for architecture, data flow, deployment, and the Nine Router.
+- `templates/` — reusable Markdown templates (ADR, RFC, PRD, TRD, agent spec, prompt spec).
+- `assets/` — static assets referenced from docs.
 
-## Goals
+## Start Here
 
-- Provide an authoritative specification for Readme.
-- Define contracts, invariants, and acceptance criteria.
-- Enable AI agents to reason about Readme without ambiguity.
+1. [Project Vision](./PROJECT_VISION.md)
+2. [Product Overview](./PRODUCT_OVERVIEW.md)
+3. [PRD](./PRD.md) and [TRD](./TRD.md)
+4. [System Overview](./SYSTEM_OVERVIEW.md)
+5. [Main AI Kernel](./MAIN_AI_KERNEL.md)
+6. [Nine Router](./NINE_ROUTER.md) and [Model Discovery](./MODEL_DISCOVERY.md)
+7. [Implementation Roadmap](./IMPLEMENTATION_ROADMAP.md)
 
-## Non-Goals
+## Conventions
 
-- Implementation code — this repository is documentation-only.
-- Vendor-specific tuning beyond what is stated in Model Providers.
-
-## Requirements
-
-- MUST be consumable by both humans and AI agents.
-- MUST link to related documents in the `Related Documents` section.
-- MUST be updated whenever the contract it describes changes.
-
-## Architecture
-
-_(Detailed architecture, diagrams, and sequence flows to be authored. See `diagrams/` for Mermaid sources.)_
-
-## Interfaces
-
-_(APIs, CLI commands, events, or file formats exposed by this subsystem.)_
-
-## Data Model
-
-_(Entities, fields, invariants, and retention rules.)_
-
-## Failure Modes
-
-_(Known failure modes, detection strategy, and recovery.)_
-
-## Security Considerations
-
-_(Trust boundaries, threat model, mitigations.)_
-
-## Open Questions
-
-- _None recorded yet._
-
-## Related Documents
-
-- [Product Vision](./PROJECT_VISION.md)
-- [PRD](./PRD.md)
-- [TRD](./TRD.md)
-- [Main AI Kernel](./MAIN_AI_KERNEL.md)
-- [System Overview](./SYSTEM_OVERVIEW.md)
+- Every subsystem doc follows the same section skeleton (Overview → Goals → Non-Goals → Requirements → Architecture → Interfaces → Data Model → Failure Modes → Security → Open Questions → Related Documents).
+- Diagrams live in `diagrams/` as Mermaid; docs link to them rather than inlining.
+- Prompts live in `prompts/`; docs describing prompt behavior link to the prompt file.
+- This repository must never contain application code. See [AI Coding Rules](./AI_CODING_RULES.md).

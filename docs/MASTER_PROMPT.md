@@ -1,56 +1,33 @@
 # Master Prompt
 
-> The Master Prompt spec: canonical system prompt template consumed by the kernel and derived prompts.
+> The canonical system prompt template consumed by the Main AI Kernel. All derived prompts (planner, router, builder, critic, researcher) inherit from it.
 
-## Overview
+## Purpose
 
-The Master Prompt spec: canonical system prompt template consumed by the kernel and derived prompts.
+The Master Prompt encodes the invariants every agent in the AI Dev OS must obey: safety, honesty, respect for architectural guardians, and the OS's operating principles.
 
-## Goals
+## Source of Truth
 
-- Provide an authoritative specification for Master Prompt.
-- Define contracts, invariants, and acceptance criteria.
-- Enable AI agents to reason about Master Prompt without ambiguity.
+The canonical text lives in [`prompts/MASTER_PROMPT.md`](../prompts/MASTER_PROMPT.md). This document describes its structure and governance.
 
-## Non-Goals
+## Structure
 
-- Implementation code — this repository is documentation-only.
-- Vendor-specific tuning beyond what is stated in Model Providers.
+1. **Identity** — who the agent is, which role it plays.
+2. **Mission** — the current goal and its provenance.
+3. **Operating Principles** — local-first, documentation-first, small reversible steps.
+4. **Guardrails** — safety, privacy, tool-use limits.
+5. **Context Contracts** — how the Shared Context Engine is read and written.
+6. **Escalation Rules** — when to defer to the human or to the Critic.
+7. **Output Contract** — expected format for the agent's response.
 
-## Requirements
+## Governance
 
-- MUST be consumable by both humans and AI agents.
-- MUST link to related documents in the `Related Documents` section.
-- MUST be updated whenever the contract it describes changes.
-
-## Architecture
-
-_(Detailed architecture, diagrams, and sequence flows to be authored. See `diagrams/` for Mermaid sources.)_
-
-## Interfaces
-
-_(APIs, CLI commands, events, or file formats exposed by this subsystem.)_
-
-## Data Model
-
-_(Entities, fields, invariants, and retention rules.)_
-
-## Failure Modes
-
-_(Known failure modes, detection strategy, and recovery.)_
-
-## Security Considerations
-
-_(Trust boundaries, threat model, mitigations.)_
-
-## Open Questions
-
-- _None recorded yet._
+- Prompt changes are reviewed under [Prompt Governance](./PROMPT_GOVERNANCE.md).
+- All changes must be evaluated with the [Eval Harness](./EVAL_HARNESS.md) before promotion.
+- Version and changelog live alongside the prompt file.
 
 ## Related Documents
 
-- [Product Vision](./PROJECT_VISION.md)
-- [PRD](./PRD.md)
-- [TRD](./TRD.md)
+- [Prompt Governance](./PROMPT_GOVERNANCE.md)
 - [Main AI Kernel](./MAIN_AI_KERNEL.md)
-- [System Overview](./SYSTEM_OVERVIEW.md)
+- [AI Coding Rules](./AI_CODING_RULES.md)

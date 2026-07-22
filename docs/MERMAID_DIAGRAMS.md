@@ -1,56 +1,30 @@
 # Mermaid Diagrams
 
-> Diagram conventions — where Mermaid vs plain ASCII is used, palette, and file layout.
+> Diagram conventions for the AI Dev OS documentation.
 
-## Overview
+## Where Diagrams Live
 
-Diagram conventions — where Mermaid vs plain ASCII is used, palette, and file layout.
+- All source diagrams live under `diagrams/` as Markdown files with fenced ```` ```mermaid ```` blocks.
+- Subsystem docs link to a diagram rather than inlining large diagrams.
 
-## Goals
+## When to Use Mermaid vs ASCII
 
-- Provide an authoritative specification for Mermaid Diagrams.
-- Define contracts, invariants, and acceptance criteria.
-- Enable AI agents to reason about Mermaid Diagrams without ambiguity.
+- **Mermaid** for flows, sequences, state machines, ERDs, and class diagrams.
+- **ASCII** for tiny inline diagrams (2–5 nodes) where a fenced ```text``` block is clearer.
 
-## Non-Goals
+## Style
 
-- Implementation code — this repository is documentation-only.
-- Vendor-specific tuning beyond what is stated in Model Providers.
+- One diagram per file where possible.
+- Node IDs UPPER_SNAKE_CASE; labels sentence case.
+- Prefer left-to-right flowcharts (`flowchart LR`) for pipelines.
+- Colors reserved for status (red = failure path, green = happy path); do not use color for decoration.
 
-## Requirements
+## Index
 
-- MUST be consumable by both humans and AI agents.
-- MUST link to related documents in the `Related Documents` section.
-- MUST be updated whenever the contract it describes changes.
-
-## Architecture
-
-_(Detailed architecture, diagrams, and sequence flows to be authored. See `diagrams/` for Mermaid sources.)_
-
-## Interfaces
-
-_(APIs, CLI commands, events, or file formats exposed by this subsystem.)_
-
-## Data Model
-
-_(Entities, fields, invariants, and retention rules.)_
-
-## Failure Modes
-
-_(Known failure modes, detection strategy, and recovery.)_
-
-## Security Considerations
-
-_(Trust boundaries, threat model, mitigations.)_
-
-## Open Questions
-
-- _None recorded yet._
-
-## Related Documents
-
-- [Product Vision](./PROJECT_VISION.md)
-- [PRD](./PRD.md)
-- [TRD](./TRD.md)
-- [Main AI Kernel](./MAIN_AI_KERNEL.md)
-- [System Overview](./SYSTEM_OVERVIEW.md)
+- [Architecture](../diagrams/ARCHITECTURE.md)
+- [AI Kernel](../diagrams/AI_KERNEL.md)
+- [Context Engine](../diagrams/CONTEXT_ENGINE.md)
+- [Data Flow](../diagrams/DATA_FLOW.md)
+- [Deployment Topology](../diagrams/DEPLOYMENT_TOPOLOGY.md)
+- [Knowledge Graph](../diagrams/KNOWLEDGE_GRAPH.md)
+- [Nine Router Flow](../diagrams/NINE_ROUTER_FLOW.md)
